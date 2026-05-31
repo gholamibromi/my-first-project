@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #==============================================================================
-#  All-in-one VPN  :  VLESS-WS / VLESS-XHTTP / VLESS-Reality / Hysteria2
-#  تعاملی - روی سرور تازه Debian/Ubuntu - بدون نیاز به هیچ پیش‌نیازی
-#  اجرا:  bash <(curl -fsSL https://raw.githubusercontent.com/USER/REPO/main/setup.sh)
+#  All-in-one VPN : VLESS-WS / VLESS-XHTTP / VLESS-Reality / Hysteria2
+#  Interactive installer for a fresh Debian/Ubuntu server. No prerequisites.
+#  Run:
+#    bash <(curl -fsSL https://raw.githubusercontent.com/USER/REPO/main/setup.sh)
 #==============================================================================
 set -euo pipefail
 
@@ -13,8 +14,10 @@ warn(){ printf "${C3}[!]${C0} %s\n" "$*"; }
 die(){  printf "${C4}[x]${C0} %s\n" "$*" >&2; exit 1; }
 
 TTY=/dev/tty
-[ -r "$TTY" ] || TTY=/dev/stdin     # fallback اگر ترمینال نبود
-ask(){  # ask VAR "متن" "پیش‌فرض"
+[ -r "$TTY" ] || TTY=/dev/stdin
+
+# ask VAR "prompt text" "default"
+ask(){
   local __v="$1" __p="$2" __d="${3:-}" __a
   if [ -n "$__d" ]; then printf "${C3}%s${C0} [%s]: " "$__p" "$__d" >"$TTY"
   else printf "${C3}%s${C0}: " "$__p" >"$TTY"; fi
@@ -25,9 +28,9 @@ ask(){  # ask VAR "متن" "پیش‌فرض"
 rand(){ openssl rand -hex "${1:-8}"; }
 free_port(){ fuser -k "${1}/${2:-tcp}" 2>/dev/null || true; }
 
-# ---------- مقادیر داخلی ثابت ----------
-WS_PORT=10002          # پورت داخلی Xray برای WS
-XH_PORT=10001          # پورت داخلی Xray برای XHTTP
+# Internal fixed values
+WS_PORT=10002
+XH_PORT=10001
 WS_PATH="wsvpn"
 XH_PATH="xhvpn"
 declare -A PORT_IPS
@@ -35,7 +38,7 @@ declare -A PORT_IPS
 WANT_REALITY=false; WANT_WS=false; WANT_XHTTP=false; WANT_HY2=false
 USE_DOMAIN=false
 
-# ---------- 1) ریشه و نصب پایه ----------
+# 1) Root check and base install
 need_root(){ [ "$(id -u)" -eq 0 ] || die "Run as root (sudo -i)"; }
 
 install_base(){
@@ -43,12 +46,11 @@ install_base(){
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
   apt-get upgrade -y
-  apt-get install -y curl wget openssl jq ufw socat ca-certificates fuser \
-    >/dev/null 2>&1 || apt-get install -y curl wget openssl jq ufw socat ca-certificates psmisc
+  apt-get install -y curl wget openssl jq ufw socat ca-certificates psmisc >/dev/null 2>&1
   ok "Prerequisites installed"
 }
 
-# ---------- 2) منوی حالت ----------
+# 2) Mode menu
 menu_mode(){
   printf "\n${C2}=== Select config type ===${C0}\n" >"$TTY"
   printf "  1) Without domain  (Reality)\n" >"$TTY"
@@ -63,7 +65,7 @@ menu_mode(){
   esac
 }
 
-# ---------- 3) دریافت ورودی‌ها ----------
+# 3) Collect inputs
 collect_inputs(){
   SERVER_IP="$(curl -fsSL https://api.ipify.org || hostname -I | awk '{print $1}')"
 
@@ -71,28 +73,27 @@ collect_inputs(){
     ask DOMAIN "Domain for WS/XHTTP (Cloudflare orange-cloud)"
     [ -n "${DOMAIN:-}" ] || die "Domain is required"
 
-    # گواهی Hysteria2
-    printf "\n${C2}Hysteria2 certificate:${C0}  1) self-signed   2) Let's Encrypt\n" >"$TTY"
+    printf "\n${C2}Hysteria2 certificate:${C0} 1) self-signed  2) Let's Encrypt\n" >"$TTY"
     ask HY2_CERT_CH "Choice" "1"
     if [ "$HY2_CERT_CH" = "2" ]; then
       HY2_CERT="le"
       ask HY2_DOMAIN "Hysteria2 subdomain (grey-cloud / DNS only)"
-      ask LE_EMAIL   "Email for Let's Encrypt"
+      ask LE_EMAIL "Email for Let's Encrypt"
     else
       HY2_CERT="self"
     fi
 
-    ask NGINX_PORT "Nginx port (CDN origin - e.g. 443/2053/2083/2087/2096/8443)" "2096"
-    ask HY2_PORT   "Hysteria2 port (UDP)" "36712"
+    ask NGINX_PORT "Nginx port (CDN origin: 443/2053/2083/2087/2096/8443)" "2096"
+    ask HY2_PORT "Hysteria2 port (UDP)" "36712"
   fi
 
   if $WANT_REALITY; then
     ask REALITY_PORT "Reality port (direct TCP)" "8443"
-    ask SNI          "SNI/destination for Reality (a real website)" "www.microsoft.com"
+    ask SNI "SNI/destination for Reality (a real website)" "www.microsoft.com"
   fi
 
   if $WANT_WS || $WANT_XHTTP; then
-    printf "\n${C2}Clean ports and IPs${C0} - one per line in this format, empty line to finish:\n" >"$TTY"
+    printf "\n${C2}Clean ports and IPs${C0} (one per line, empty line to finish):\n" >"$TTY"
     printf "  PORT_IPS[8443]=\"104.21.0.1,172.67.0.2\"\n" >"$TTY"
     while true; do
       local line; read -r line <"$TTY" || break
@@ -111,7 +112,7 @@ collect_inputs(){
   ask CONFIG_NAME "A name for your configs" "MyVPN"
 }
 
-# ---------- 4) نصب هسته‌ها ----------
+# 4) Install cores
 install_cores(){
   log "Installing Xray ..."
   bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install >/dev/null
@@ -130,7 +131,7 @@ install_cores(){
   if [ "${HY2_CERT:-}" = "le" ]; then apt-get install -y certbot >/dev/null; fi
 }
 
-# ---------- 5) اسرار ----------
+# 5) Secrets
 gen_secrets(){
   UUID="$(cat /proc/sys/kernel/random/uuid)"
   if $WANT_REALITY; then
@@ -142,7 +143,7 @@ gen_secrets(){
   $WANT_HY2 && HY2_PASS="$(rand 16)"
 }
 
-# ---------- 6) گواهی‌ها ----------
+# 6) Certificates
 setup_certs(){
   if $USE_DOMAIN; then
     mkdir -p /etc/ssl/cdn
@@ -169,19 +170,12 @@ setup_certs(){
   fi
 }
 
-# ---------- 7) کانفیگ Xray ----------
+# 7) Xray config
 write_xray(){
   local ib=()
   if $WANT_REALITY; then
     free_port "$REALITY_PORT" tcp
-    ib+=("$(cat <<EOF
-{"tag":"reality","listen":"0.0.0.0","port":${REALITY_PORT},"protocol":"vless",
-"settings":{"clients":[{"id":"${UUID}","flow":"xtls-rprx-vision"}],"decryption":"none"},
-"streamSettings":{"network":"tcp","security":"reality","realitySettings":{
-"show":false,"dest":"${SNI}:443","xver":0,"serverNames":["${SNI}"],
-"privateKey":"${REALITY_PRIV}","shortIds":["${REALITY_SID}"]}}}
-EOF
-)")
+    ib+=("{\"tag\":\"reality\",\"listen\":\"0.0.0.0\",\"port\":${REALITY_PORT},\"protocol\":\"vless\",\"settings\":{\"clients\":[{\"id\":\"${UUID}\",\"flow\":\"xtls-rprx-vision\"}],\"decryption\":\"none\"},\"streamSettings\":{\"network\":\"tcp\",\"security\":\"reality\",\"realitySettings\":{\"show\":false,\"dest\":\"${SNI}:443\",\"xver\":0,\"serverNames\":[\"${SNI}\"],\"privateKey\":\"${REALITY_PRIV}\",\"shortIds\":[\"${REALITY_SID}\"]}}}")
   fi
   if $WANT_WS; then
     ib+=("{\"tag\":\"ws\",\"listen\":\"127.0.0.1\",\"port\":${WS_PORT},\"protocol\":\"vless\",\"settings\":{\"clients\":[{\"id\":\"${UUID}\"}],\"decryption\":\"none\"},\"streamSettings\":{\"network\":\"ws\",\"wsSettings\":{\"path\":\"/${WS_PATH}\"}}}")
@@ -198,7 +192,7 @@ EOF
 EOF
 }
 
-# ---------- 8) کانفیگ Hysteria2 ----------
+# 8) Hysteria2 config
 write_hysteria(){
   free_port "$HY2_PORT" udp
   cat >/etc/hysteria/config.yaml <<EOF
@@ -217,7 +211,7 @@ masquerade:
 EOF
 }
 
-# ---------- 9) کانفیگ Nginx ----------
+# 9) Nginx config
 write_nginx(){
   local LISTENS="" ; declare -A seen
   for p in "$NGINX_PORT" "${!PORT_IPS[@]}"; do
@@ -254,7 +248,7 @@ EOF
   rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 }
 
-# ---------- 10) فایروال ----------
+# 10) Firewall
 setup_fw(){
   ufw allow 22/tcp >/dev/null 2>&1 || true
   $WANT_REALITY && ufw allow "${REALITY_PORT}/tcp" >/dev/null 2>&1 || true
@@ -266,7 +260,7 @@ setup_fw(){
   yes | ufw enable >/dev/null 2>&1 || true
 }
 
-# ---------- 11) سرویس‌ها ----------
+# 11) Services
 start_all(){
   systemctl enable --now xray >/dev/null 2>&1 || true
   systemctl restart xray
@@ -274,7 +268,7 @@ start_all(){
   if $USE_DOMAIN; then nginx -t && systemctl enable --now nginx >/dev/null 2>&1 || true; systemctl restart nginx; fi
 }
 
-# ---------- 12) لینک‌ها ----------
+# 12) Links
 OUT="/root/${CONFIG_NAME:-vpn}-configs.txt"
 gen_links(){
   : > "$OUT"
@@ -305,7 +299,7 @@ summary(){
   [ "${HY2_CERT:-}" = "le" ] && warn "Subdomain ${HY2_DOMAIN} must be grey-cloud (DNS only)"
 }
 
-# ---------- اجرا ----------
+# Run
 need_root
 install_base
 menu_mode
