@@ -405,7 +405,6 @@ print_links(){
 
 # ---------- Main ----------
 main(){
-  require_root
   base_install      # نصب پکیج‌های پایه (psmisc, lsof, curl, ...)
   cleanup_old       # حذف کانفیگ‌های قدیمی و توقف سرویس‌ها
   ask_inputs        # دریافت ورودی‌ها (انگلیسی)
