@@ -206,7 +206,6 @@ collect_inputs(){
       warn "Let's try entering proxies again."
     done
   fi
-fi
 
   ask CONFIG_NAME "A name for your configs" "MyVPN"
 }
