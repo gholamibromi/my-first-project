@@ -11,15 +11,12 @@ ok(){   printf "${CG}[ok]${C0} %s\n"   "$*" >"$TTY"; }
 warn(){ printf "${C2}[warn]${C0} %s\n" "$*" >"$TTY"; }
 die(){  printf "${CR}[err]${C0} %s\n"  "$*" >"$TTY"; exit 1; }
 
-# سقف تلاش برای هر پرسش: ۱ بار اول + ۲ فرصت دیگر = ۳ بار
 MAX_TRIES=3
 
-# الگوهای اعتبارسنجی
 RE_DOMAIN='^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}$'
 RE_EMAIL='^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'
 RE_EXT='^PORT_IPS\[([0-9]+)\]="?([0-9A-Za-z.,:_-]+)"?$'
 
-# تابع پایه پرسش: نام متغیر، متن، مقدار پیش‌فرض
 ask(){
   local __var="$1" __prompt="$2" __default="${3:-}" __ans=""
   if [ -n "$__default" ]; then
@@ -32,7 +29,6 @@ ask(){
   printf -v "$__var" '%s' "$__ans"
 }
 
-# پرسش بله/خیر؛ پاسخ نامعتبر را تا ۳ بار دوباره می‌پرسد سپس قطع می‌کند
 ask_yesno(){
   local __var="$1" __prompt="$2" __default="${3:-}" __ans="" __try=0
   while [ "$__try" -lt "$MAX_TRIES" ]; do
@@ -48,7 +44,6 @@ ask_yesno(){
   die "Too many invalid attempts."
 }
 
-# پرسش انتخاب از بین گزینه‌های مجاز؛ ۳ بار فرصت سپس قطع
 ask_choice(){
   local __var="$1" __prompt="$2" __default="$3"; shift 3
   local __valid=("$@") __ans="" v __try=0
@@ -64,7 +59,6 @@ ask_choice(){
   die "Too many invalid attempts."
 }
 
-# پرسش متن با اعتبارسنجی regex؛ ۳ بار فرصت سپس قطع
 ask_valid(){
   local __var="$1" __prompt="$2" __regex="$3" __default="${4:-}" __ans="" __try=0
   while [ "$__try" -lt "$MAX_TRIES" ]; do
@@ -79,7 +73,6 @@ ask_valid(){
   die "Too many invalid attempts."
 }
 
-# پرسش پورت معتبر (۱ تا ۶۵۵۳۵)؛ ۳ بار فرصت سپس قطع
 ask_port(){
   local __var="$1" __prompt="$2" __default="${3:-}" __ans="" __try=0
   while [ "$__try" -lt "$MAX_TRIES" ]; do
@@ -95,21 +88,19 @@ ask_port(){
 }
 
 # ---------- ثابت‌ها ----------
-WS_INT=10001          # پورت داخلی WebSocket
-XHTTP_INT=10002       # پورت داخلی XHTTP
+WS_INT=10001
+XHTTP_INT=10002
 HY2_SNI="www.bing.com"
 
 # ---------- وضعیت‌ها ----------
 WANT_WS=false; WANT_XHTTP=false; WANT_REALITY=false; WANT_HY2=false
 USE_DOMAIN=false
 declare -A PORT_IPS
-EXT_COUNT=0           # شمارنده مستقل برای جلوگیری از خطای unbound روی آرایه خالی
+EXT_COUNT=0
 LINKS=()
 
-# ---------- بررسی روت ----------
 [ "$(id -u)" = 0 ] || die "Please run as root."
 
-# ---------- تشخیص پکیج‌منیجر ----------
 PKG=""
 command -v apt-get >/dev/null 2>&1 && PKG=apt
 command -v dnf     >/dev/null 2>&1 && PKG=dnf
@@ -127,18 +118,15 @@ install_deps(){
       $PKG install -y curl openssl jq nginx certbot ufw ca-certificates || true
       ;;
   esac
-  # نصب Xray از مخزن رسمی
   if ! command -v xray >/dev/null 2>&1; then
     bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
   fi
-  # نصب Hysteria2 فقط در صورت نیاز
   if $WANT_HY2 && ! command -v hysteria >/dev/null 2>&1; then
     bash <(curl -fsSL https://get.hy2.sh/)
   fi
   ok "Dependencies installed."
 }
 
-# ---------- منوی انتخاب پروتکل ----------
 menu_mode(){
   printf "\n${C2}=== Select protocols ===${C0}\n" >"$TTY"
   printf "  1) All (WS + XHTTP + Reality + Hysteria2)\n" >"$TTY"
@@ -160,11 +148,9 @@ menu_mode(){
       ask_yesno a "Enable Hysteria2?"   "y"; [ "$a" = y ] && WANT_HY2=true
       ;;
   esac
-  # WS و XHTTP به دامنه/CDN نیاز دارند
   if $WANT_WS || $WANT_XHTTP; then USE_DOMAIN=true; fi
   $WANT_WS || $WANT_XHTTP || $WANT_REALITY || $WANT_HY2 || die "Nothing selected."
 }
-# ---------- جمع‌آوری اکسترنال پروکسی با فرمت PORT_IPS[port]="ip1,ip2,..." ----------
 collect_external_proxies(){
   EXT_COUNT=0
   printf "\n${C2}External (CDN clean) proxies${C0}\n" >"$TTY"
@@ -177,7 +163,6 @@ collect_external_proxies(){
   while true; do
     printf "${C1}> ${C0}" >"$TTY"
     read -r line <"$TTY" || break
-    # حذف فاصله‌ها برای تطبیق مطمئن‌تر
     line="$(printf '%s' "$line" | tr -d '[:space:]')"
     [ -z "$line" ] && break
     if [[ "$line" =~ $RE_EXT ]]; then
@@ -191,11 +176,9 @@ collect_external_proxies(){
   done
 }
 
-# ---------- جمع‌آوری همه ورودی‌ها ----------
 collect_inputs(){
   SERVER_IP="$(curl -fsSL https://api.ipify.org || hostname -I | awk '{print $1}')"
 
-  # مقادیر پیش‌فرض پورت‌ها
   NGINX_PORT=2096
   HY2_PORT=36712
   REALITY_PORT=8443
@@ -213,12 +196,10 @@ collect_inputs(){
     if $WANT_REALITY; then ask_port REALITY_PORT "Reality port (direct TCP)" "8443"; fi
   fi
 
-  # دامنه فقط برای WS/XHTTP الزامی است؛ فرمت نامعتبر = تکرار، نه قطع آنی
   if $USE_DOMAIN; then
     ask_valid DOMAIN "Domain for WS/XHTTP (Cloudflare orange-cloud)" "$RE_DOMAIN"
   fi
 
-  # گواهی Hysteria2
   if $WANT_HY2; then
     printf "\n${C2}Hysteria2 certificate:${C0} 1) self-signed  2) Let's Encrypt\n" >"$TTY"
     ask_choice HY2_CERT_CH "Choice" "1" 1 2
@@ -231,12 +212,10 @@ collect_inputs(){
     fi
   fi
 
-  # SNI فقط برای Reality
   if $WANT_REALITY; then
     ask_valid SNI "SNI/destination for Reality (a real website)" "$RE_DOMAIN" "www.microsoft.com"
   fi
 
-  # اکسترنال پروکسی‌ها؛ خالی‌گذاشتن قطع نمی‌کند بلکه تأیید می‌گیرد
   if $WANT_WS || $WANT_XHTTP; then
     while true; do
       collect_external_proxies
@@ -254,7 +233,6 @@ collect_inputs(){
 
   ask CONFIG_NAME "A name for your configs" "MyVPN"
 }
-# ---------- تولید کلید/شناسه‌ها ----------
 gen_secrets(){
   UUID="$(xray uuid)"
   WS_PATH="/$(openssl rand -hex 4)-ws"
@@ -272,7 +250,6 @@ gen_secrets(){
   ok "Secrets generated."
 }
 
-# ---------- ساخت کانفیگ Xray ----------
 write_xray(){
   local inbounds=() joined
   mkdir -p /usr/local/etc/xray
@@ -297,7 +274,7 @@ EOF
   "port": ${XHTTP_INT},
   "protocol": "vless",
   "settings": { "clients": [ { "id": "${UUID}" } ], "decryption": "none" },
-  "streamSettings": { "network": "xhttp", "xhttpSettings": { "path": "${XHTTP_PATH}" } }
+  "streamSettings": { "network": "xhttp", "xhttpSettings": { "path": "${XHTTP_PATH}", "mode": "auto" } }
 }
 EOF
 )")
@@ -347,7 +324,6 @@ write_nginx(){
   $USE_DOMAIN || return 0
   mkdir -p /etc/ssl/xray /var/www/html /var/www/sub
 
-  # گواهی self-signed برای Nginx (سازگار با Cloudflare Full)
   if [ ! -f /etc/ssl/xray/cert.pem ]; then
     openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
       -keyout /etc/ssl/xray/key.pem -out /etc/ssl/xray/cert.pem \
@@ -358,20 +334,23 @@ write_nginx(){
   rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 
   local ws_block="" xh_block=""
+  # WS: گارد if حذف شد چون باعث ۴۰۴ روی برخی کلاینت‌ها می‌شد
   if $WANT_WS; then
     ws_block=$(cat <<EOF
     location ${WS_PATH} {
-        if (\$http_upgrade != "websocket") { return 404; }
         proxy_pass http://127.0.0.1:${WS_INT};
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
     }
 EOF
 )
   fi
+  # XHTTP: Connection خالی + غیرفعال‌کردن بافر + تایم‌اوت بلند
   if $WANT_XHTTP; then
     xh_block=$(cat <<EOF
     location ${XHTTP_PATH} {
@@ -379,8 +358,11 @@ EOF
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header Connection "";
         proxy_buffering off;
         proxy_request_buffering off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
         client_max_body_size 0;
     }
 EOF
@@ -453,26 +435,35 @@ masquerade:
     url: https://${HY2_SNI}
     rewriteHost: true
 EOF
+
+  # باگ اصلی Hysteria2: سرویس رسمی با کاربر غیرروت اجرا می‌شود و نمی‌تواند
+  # کلید گواهی را بخواند (مخصوصاً privkey.pem لتس‌انکریپت فقط روت‌خوان است).
+  # با override سرویس را روت اجرا می‌کنیم تا گواهی‌ها قابل دسترسی باشند.
+  mkdir -p /etc/systemd/system/hysteria-server.service.d
+  cat > /etc/systemd/system/hysteria-server.service.d/override.conf <<EOF
+[Service]
+User=root
+Group=root
+EOF
+  systemctl daemon-reload
   ok "Hysteria2 config written."
 }
 
 # ---------- تولید لینک‌ها ----------
 gen_links(){
-  local enc_ws enc_xh port ip
-  enc_ws="$(printf '%s' "${WS_PATH:-}"    | sed 's:/:%2F:g')"
-  enc_xh="$(printf '%s' "${XHTTP_PATH:-}" | sed 's:/:%2F:g')"
-
-  # PORT_IPS فقط وقتی WS/XHTTP فعال باشد پر شده، پس آرایه خالی نیست
+  local port ip
+  # باگ اصلی WS/XHTTP: انکُدکردن مسیر به %2F باعث ناسازگاری با location نگینکس
+  # و خطای ۴۰۴ می‌شد. مسیر باید خام بماند.
   if $WANT_WS || $WANT_XHTTP; then
     for port in "${!PORT_IPS[@]}"; do
       IFS=',' read -ra _ips <<< "${PORT_IPS[$port]}"
       for ip in "${_ips[@]}"; do
         [ -z "$ip" ] && continue
         if $WANT_WS; then
-          LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=chrome&type=ws&host=${DOMAIN}&path=${enc_ws}#${CONFIG_NAME}-WS-${ip}")
+          LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=chrome&type=ws&host=${DOMAIN}&path=${WS_PATH}#${CONFIG_NAME}-WS-${ip}")
         fi
         if $WANT_XHTTP; then
-          LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=chrome&type=xhttp&host=${DOMAIN}&path=${enc_xh}#${CONFIG_NAME}-XHTTP-${ip}")
+          LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=chrome&type=xhttp&host=${DOMAIN}&path=${XHTTP_PATH}&mode=auto#${CONFIG_NAME}-XHTTP-${ip}")
         fi
       done
     done
@@ -493,7 +484,6 @@ gen_links(){
   fi
 }
 
-# ---------- ساخت لینک اشتراک (Base64) ----------
 gen_subscription(){
   $USE_DOMAIN || return 0
   mkdir -p /var/www/sub
@@ -502,7 +492,6 @@ gen_subscription(){
   ok "Subscription file created."
 }
 
-# ---------- فایروال ----------
 open_firewall(){
   command -v ufw >/dev/null 2>&1 || return 0
   $USE_DOMAIN     && ufw allow "${NGINX_PORT}/tcp"   >/dev/null 2>&1 || true
@@ -511,7 +500,6 @@ open_firewall(){
   [ "${HY2_CERT:-}" = "le" ] && ufw allow 80/tcp     >/dev/null 2>&1 || true
 }
 
-# ---------- راه‌اندازی سرویس‌ها ----------
 start_services(){
   systemctl enable xray >/dev/null 2>&1 || true
   systemctl restart xray
@@ -522,11 +510,13 @@ start_services(){
   if $WANT_HY2; then
     systemctl enable hysteria-server >/dev/null 2>&1 || true
     systemctl restart hysteria-server
+    sleep 1
+    systemctl is-active --quiet hysteria-server \
+      || warn "Hysteria2 service is not active. Check: journalctl -u hysteria-server -n 30"
   fi
   ok "Services started."
 }
 
-# ---------- خروجی نهایی ----------
 print_summary(){
   printf "\n${C2}================ DONE ================${C0}\n" >"$TTY"
   local l
@@ -535,11 +525,12 @@ print_summary(){
   done
   if $USE_DOMAIN; then
     printf "${CG}Subscription URL:${C0}\n%s\n" "${SUB_URL}" >"$TTY"
+    printf "${C2}Note:${C0} Cloudflare SSL mode must be 'Full', domain proxied (orange),\n" >"$TTY"
+    printf "      and port one of 443/2053/2083/2087/2096/8443.\n" >"$TTY"
   fi
   printf "${C2}=====================================${C0}\n" >"$TTY"
 }
 
-# ---------- جریان اصلی ----------
 main(){
   menu_mode
   collect_inputs
