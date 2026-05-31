@@ -26,7 +26,7 @@ rand(){ openssl rand -hex "${1:-8}"; }
 free_port(){ fuser -k "${1}/${2:-tcp}" 2>/dev/null || true; }
 
 # ---------- مقادیر داخلی ثابت ----------
-WS_PORT=10002# پورت داخلی Xray برای WS
+WS_PORT=10002          # پورت داخلی Xray برای WS
 XH_PORT=10001          # پورت داخلی Xray برای XHTTP
 WS_PATH="wsvpn"
 XH_PATH="xhvpn"
@@ -34,6 +34,7 @@ declare -A PORT_IPS
 
 WANT_REALITY=false; WANT_WS=false; WANT_XHTTP=false; WANT_HY2=false
 USE_DOMAIN=false
+
 # ---------- 1) ریشه و نصب پایه ----------
 need_root(){ [ "$(id -u)" -eq 0 ] || die "Run as root (sudo -i)"; }
 
@@ -96,7 +97,7 @@ collect_inputs(){
     while true; do
       local line; read -r line <"$TTY" || break
       [ -z "$line" ] && break
-      if [[ "$line" =~ ^PORT_IPS\\\[([0-9]+)\\\]=\"?([^\"]*)\"?$ ]]; then
+      if [[ "$line" =~ ^PORT_IPS\[([0-9]+)\]=\"?([^\"]*)\"?$ ]]; then
         PORT_IPS["${BASH_REMATCH[1]}"]="${BASH_REMATCH[2]}"
       elif [[ "$line" =~ ^([0-9]+)[[:space:]:]+(.+)$ ]]; then
         PORT_IPS["${BASH_REMATCH[1]}"]="${BASH_REMATCH[2]}"
@@ -109,11 +110,13 @@ collect_inputs(){
 
   ask CONFIG_NAME "A name for your configs" "MyVPN"
 }
+
 # ---------- 4) نصب هسته‌ها ----------
 install_cores(){
   log "Installing Xray ..."
   bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install >/dev/null
-  ok "Xray installed"if $WANT_HY2; then
+  ok "Xray installed"
+  if $WANT_HY2; then
     log "Installing Hysteria2 ..."
     bash <(curl -fsSL https://get.hy2.sh/) >/dev/null
     ok "Hysteria2 installed"
@@ -123,14 +126,16 @@ install_cores(){
     apt-get install -y nginx >/dev/null
     systemctl stop nginx 2>/dev/null || true
     ok "Nginx installed"
-  fiif [ "${HY2_CERT:-}" = "le" ]; then apt-get install -y certbot >/dev/null; fi
+  fi
+  if [ "${HY2_CERT:-}" = "le" ]; then apt-get install -y certbot >/dev/null; fi
 }
 
 # ---------- 5) اسرار ----------
 gen_secrets(){
   UUID="$(cat /proc/sys/kernel/random/uuid)"
   if $WANT_REALITY; then
-    local kp; kp="$(xray x25519)"REALITY_PRIV="$(echo "$kp" | grep -i private | awk '{print $NF}')"
+    local kp; kp="$(xray x25519)"
+    REALITY_PRIV="$(echo "$kp" | grep -i private | awk '{print $NF}')"
     REALITY_PUB="$(echo "$kp"  | grep -i public  | awk '{print $NF}')"
     REALITY_SID="$(rand 8)"
   fi
@@ -150,7 +155,8 @@ setup_certs(){
     if [ "$HY2_CERT" = "le" ]; then
       free_port 80 tcp
       certbot certonly --standalone --non-interactive --agree-tos \
-        -m "$LE_EMAIL" -d "$HY2_DOMAIN"HY2_CRT="/etc/letsencrypt/live/${HY2_DOMAIN}/fullchain.pem"
+        -m "$LE_EMAIL" -d "$HY2_DOMAIN"
+      HY2_CRT="/etc/letsencrypt/live/${HY2_DOMAIN}/fullchain.pem"
       HY2_KEY="/etc/letsencrypt/live/${HY2_DOMAIN}/privkey.pem"
       HY2_SNI="$HY2_DOMAIN"; HY2_CONN="$HY2_DOMAIN"; HY2_INSECURE=0
     else
@@ -162,6 +168,7 @@ setup_certs(){
     fi
   fi
 }
+
 # ---------- 7) کانفیگ Xray ----------
 write_xray(){
   local ib=()
@@ -246,6 +253,7 @@ ${LISTENS}    server_name ${DOMAIN};
 EOF
   rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 }
+
 # ---------- 10) فایروال ----------
 setup_fw(){
   ufw allow 22/tcp >/dev/null 2>&1 || true
