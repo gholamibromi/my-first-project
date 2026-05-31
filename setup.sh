@@ -23,6 +23,33 @@ ask(){
   [ -z "$__ans" ] && __ans="$__default"
   printf -v "$__var" '%s' "$__ans"
 }
+# پرسش بله/خیر با اعتبارسنجی؛ تا جواب معتبر نده دوباره می‌پرسد
+ask_yesno(){
+  local __var="$1" __prompt="$2" __default="${3:-}" __ans=""
+  while true; do
+    ask "$__var" "$__prompt (y/n)" "$__default"
+    __ans="${!__var}"; __ans="${__ans,,}"
+    case "$__ans" in
+      y|yes) printf -v "$__var" 'y'; return 0 ;;
+      n|no)  printf -v "$__var" 'n'; return 0 ;;
+      *) warn "Please answer y or n." ;;
+    esac
+  done
+}
+
+# پرسش انتخاب از بین گزینه‌های مجاز؛ ورودی نامعتبر را رد می‌کند
+ask_choice(){
+  local __var="$1" __prompt="$2" __default="$3"; shift 3
+  local __valid=("$@") __ans="" v
+  while true; do
+    ask "$__var" "$__prompt" "$__default"
+    __ans="${!__var}"
+    for v in "${__valid[@]}"; do
+      [ "$__ans" = "$v" ] && return 0
+    done
+    warn "Invalid choice. Allowed: ${__valid[*]}"
+  done
+}
 
 # ---------- ثابت‌ها ----------
 WS_INT=10001          # پورت داخلی WebSocket
@@ -75,7 +102,7 @@ menu_mode(){
   printf "  3) Reality only\n" >"$TTY"
   printf "  4) Hysteria2 only\n" >"$TTY"
   printf "  5) Custom\n" >"$TTY"
-  ask MODE "Choice" "1"
+  ask_choice MODE "Choice" "1" 1 2 3 4 5
   case "$MODE" in
     1) WANT_WS=true; WANT_XHTTP=true; WANT_REALITY=true; WANT_HY2=true ;;
     2) WANT_WS=true; WANT_XHTTP=true ;;
@@ -83,41 +110,39 @@ menu_mode(){
     4) WANT_HY2=true ;;
     5)
       local a
-      ask a "Enable VLESS-WS? (y/n)" "y";    [ "$a" = y ] && WANT_WS=true
-      ask a "Enable VLESS-XHTTP? (y/n)" "y"; [ "$a" = y ] && WANT_XHTTP=true
-      ask a "Enable Reality? (y/n)" "y";     [ "$a" = y ] && WANT_REALITY=true
-      ask a "Enable Hysteria2? (y/n)" "y";   [ "$a" = y ] && WANT_HY2=true
+      ask_yesno a "Enable VLESS-WS?"    "y"; [ "$a" = y ] && WANT_WS=true
+      ask_yesno a "Enable VLESS-XHTTP?" "y"; [ "$a" = y ] && WANT_XHTTP=true
+      ask_yesno a "Enable Reality?"     "y"; [ "$a" = y ] && WANT_REALITY=true
+      ask_yesno a "Enable Hysteria2?"   "y"; [ "$a" = y ] && WANT_HY2=true
       ;;
-    *) die "Invalid choice" ;;
   esac
-  # WS و XHTTP به دامنه/CDN نیاز دارند
   if $WANT_WS || $WANT_XHTTP; then USE_DOMAIN=true; fi
   $WANT_WS || $WANT_XHTTP || $WANT_REALITY || $WANT_HY2 || die "Nothing selected."
 }
 
 # ---------- جمع‌آوری اکسترنال پروکسی (تک‌خطی) ----------
 collect_external_proxies(){
+  EXT_COUNT=0
   printf "\n${C2}External (CDN clean) proxies${C0}\n" >"$TTY"
-  printf "  Syntax:  port:ip1,ip2,ip3;port:ip1,ip2\n" >"$TTY"
-  printf "  Example: 2096:1.1.1.1,2.2.2.2;8443:cdn.example.com\n" >"$TTY"
-  printf "  Leave empty to skip.\n" >"$TTY"
-  ask EXT "External proxies" ""
-  if [ -n "${EXT:-}" ]; then
-    # هر گروه با ; جدا می‌شود، فرمت هر گروه port:ipها
-    local groups g port ips
-    IFS=';' read -ra groups <<< "$EXT"
-    for g in "${groups[@]}"; do
-      g="$(echo "$g" | tr -d ' ')"
-      [ -z "$g" ] && continue
-      port="${g%%:*}"; ips="${g#*:}"
-      if [[ "$port" =~ ^[0-9]+$ ]] && [ -n "$ips" ]; then
-        PORT_IPS["$port"]="$ips"
-        ok "Added: port ${port} -> ${ips}"
-      else
-        warn "Skipped invalid entry: ${g}"
-      fi
-    done
-  fi
+  printf "  Paste lines in this exact format, then an empty line to finish:\n" >"$TTY"
+  printf '    PORT_IPS[443]="104.19.184.210,104.27.53.171,104.21.127.190"\n' >"$TTY"
+  printf '    PORT_IPS[2053]="104.19.184.210,104.27.53.171"\n' >"$TTY"
+  printf "  Press Enter on an empty line to skip.\n" >"$TTY"
+  local line port ips
+  while true; do
+    printf "${C1}> ${C0}" >"$TTY"
+    read -r line <"$TTY" || break
+    line="$(printf '%s' "$line" | tr -d ' ')"
+    [ -z "$line" ] && break
+    if [[ "$line" =~ ^PORT_IPS\[([0-9]+)\]=\"?([0-9a-zA-Z.,:_-]+)\"?$ ]]; then
+      port="${BASH_REMATCH[1]}"; ips="${BASH_REMATCH[2]}"
+      PORT_IPS["$port"]="$ips"
+      EXT_COUNT=$((EXT_COUNT+1))
+      ok "Added: port ${port} -> ${ips}"
+    else
+      warn "Invalid format, ignored: ${line}"
+    fi
+  done
 }
 
 # ---------- جمع‌آوری همه ورودی‌ها ----------
@@ -151,7 +176,7 @@ collect_inputs(){
   # گواهی Hysteria2
   if $WANT_HY2; then
     printf "\n${C2}Hysteria2 certificate:${C0} 1) self-signed  2) Let's Encrypt\n" >"$TTY"
-    ask HY2_CERT_CH "Choice" "1"
+    ask_choice HY2_CERT_CH "Choice" "1" 1 2
     if [ "$HY2_CERT_CH" = "2" ]; then
       HY2_CERT="le"
       ask HY2_DOMAIN "Hysteria2 subdomain (grey-cloud / DNS only)"
@@ -168,14 +193,20 @@ collect_inputs(){
   fi
 
   # اکسترنال پروکسی‌ها با سینتکس تک‌خطی
-  if $WANT_WS || $WANT_XHTTP; then
-    collect_external_proxies
-    # اگر کاربر چیزی وارد نکرد، خود دامنه روی پورت Nginx استفاده می‌شود
-    if [ "${#PORT_IPS[@]}" -eq 0 ]; then
-      PORT_IPS["$NGINX_PORT"]="$DOMAIN"
-      warn "No external proxies added. Using domain ${DOMAIN} directly on port ${NGINX_PORT}."
-    fi
+    if $WANT_WS || $WANT_XHTTP; then
+    while true; do
+      collect_external_proxies
+      if [ "${EXT_COUNT:-0}" -gt 0 ]; then break; fi
+      ask_yesno SURE "No proxies entered. Connect directly to your own domain (${DOMAIN}) on port ${NGINX_PORT}?" "y"
+      if [ "$SURE" = "y" ]; then
+        PORT_IPS["$NGINX_PORT"]="$DOMAIN"
+        warn "Using domain ${DOMAIN} directly on port ${NGINX_PORT}."
+        break
+      fi
+      warn "Let's try entering proxies again."
+    done
   fi
+fi
 
   ask CONFIG_NAME "A name for your configs" "MyVPN"
 }
