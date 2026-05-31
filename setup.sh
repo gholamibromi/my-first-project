@@ -531,7 +531,66 @@ print_summary(){
   printf "${C2}=====================================${C0}\n" >"$TTY"
 }
 
+# ---------- تشخیص نصب قبلی ----------
+detect_previous(){
+  PREV_FOUND=false
+  PREV_ITEMS=()
+  PREV_NGINX_FILES=()
+
+  [ -f /usr/local/etc/xray/config.json ] && { PREV_FOUND=true; PREV_ITEMS+=("Xray config"); }
+  [ -f /etc/hysteria/config.yaml ]       && { PREV_FOUND=true; PREV_ITEMS+=("Hysteria2 config"); }
+
+  # کانفیگ‌های Nginx متعلق به این اسکریپت (مارکر: پورت داخلی یا مسیر ساب)
+  local f
+  for f in /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/* /etc/nginx/sites-available/*; do
+    [ -f "$f" ] || continue
+    if grep -qE "127\.0\.0\.1:(${WS_INT}|${XHTTP_INT})|/var/www/sub" "$f" 2>/dev/null; then
+      PREV_NGINX_FILES+=("$f"); PREV_FOUND=true
+    fi
+  done
+  [ "${#PREV_NGINX_FILES[@]}" -gt 0 ] && PREV_ITEMS+=("Nginx config(s): ${PREV_NGINX_FILES[*]}")
+
+  if ls /var/www/sub/* >/dev/null 2>&1; then
+    PREV_FOUND=true; PREV_ITEMS+=("Subscription files in /var/www/sub")
+  fi
+}
+
+# ---------- پاکسازی نصب قبلی ----------
+cleanup_previous(){
+  warn "Removing previous configuration..."
+  systemctl stop nginx 2>/dev/null || true
+  systemctl stop xray  2>/dev/null || true
+  systemctl stop hysteria-server 2>/dev/null || true
+
+  local f
+  for f in "${PREV_NGINX_FILES[@]}"; do
+    rm -f "$f" && ok "Removed Nginx config: $f"
+  done
+
+  rm -f /usr/local/etc/xray/config.json
+  rm -f /etc/hysteria/config.yaml /etc/hysteria/cert.pem /etc/hysteria/key.pem
+  rm -f /var/www/sub/* 2>/dev/null || true
+
+  # override قدیمی Hysteria2 (در صورت لزوم دوباره ساخته می‌شود)
+  rm -f /etc/systemd/system/hysteria-server.service.d/override.conf 2>/dev/null || true
+  systemctl daemon-reload 2>/dev/null || true
+
+  ok "Previous configuration removed."
+}
 main(){
+  detect_previous
+  if $PREV_FOUND; then
+    warn "A previous installation was detected on this server:"
+    local it
+    for it in "${PREV_ITEMS[@]}"; do
+      printf "    - %s\n" "$it" >"$TTY"
+    done
+    warn "Continuing will DELETE these. All current configs/links will STOP working."
+    ask_yesno GO_ON "Continue and replace the previous installation?" "n"
+    [ "$GO_ON" = "y" ] || die "Aborted by user. Nothing was changed."
+    cleanup_previous
+  fi
+
   menu_mode
   collect_inputs
   install_deps
@@ -545,5 +604,4 @@ main(){
   start_services
   print_summary
 }
-
 main "$@"
