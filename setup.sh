@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 #==============================================================================
 #  All-in-one VPN : VLESS-WS / VLESS-XHTTP / VLESS-Reality / Hysteria2
-#  Interactive installer for a fresh Debian/Ubuntu server. No prerequisites.
-#  Run:
-#    bash <(curl -fsSL https://raw.githubusercontent.com/USER/REPO/main/setup.sh)
+#  Interactive installer with subscription link support.
 #==============================================================================
 set -euo pipefail
 
@@ -16,7 +14,6 @@ die(){  printf "${C4}[x]${C0} %s\n" "$*" >&2; exit 1; }
 TTY=/dev/tty
 [ -r "$TTY" ] || TTY=/dev/stdin
 
-# ask VAR "prompt text" "default"
 ask(){
   local __v="$1" __p="$2" __d="${3:-}" __a
   if [ -n "$__d" ]; then printf "${C3}%s${C0} [%s]: " "$__p" "$__d" >"$TTY"
@@ -28,7 +25,6 @@ ask(){
 rand(){ openssl rand -hex "${1:-8}"; }
 free_port(){ fuser -k "${1}/${2:-tcp}" 2>/dev/null || true; }
 
-# Internal fixed values
 WS_PORT=10002
 XH_PORT=10001
 WS_PATH="wsvpn"
@@ -38,7 +34,6 @@ declare -A PORT_IPS
 WANT_REALITY=false; WANT_WS=false; WANT_XHTTP=false; WANT_HY2=false
 USE_DOMAIN=false
 
-# 1) Root check and base install
 need_root(){ [ "$(id -u)" -eq 0 ] || die "Run as root (sudo -i)"; }
 
 install_base(){
@@ -46,11 +41,10 @@ install_base(){
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
   apt-get upgrade -y
-  apt-get install -y curl wget openssl jq ufw socat ca-certificates psmisc >/dev/null 2>&1
+  apt-get install -y curl wget openssl jq ufw socat ca-certificates psmisc coreutils >/dev/null 2>&1
   ok "Prerequisites installed"
 }
 
-# 2) Mode menu
 menu_mode(){
   printf "\n${C2}=== Select config type ===${C0}\n" >"$TTY"
   printf "  1) Without domain  (Reality)\n" >"$TTY"
@@ -65,7 +59,6 @@ menu_mode(){
   esac
 }
 
-# 3) Collect inputs
 collect_inputs(){
   SERVER_IP="$(curl -fsSL https://api.ipify.org || hostname -I | awk '{print $1}')"
 
@@ -93,18 +86,17 @@ collect_inputs(){
   fi
 
   if $WANT_WS || $WANT_XHTTP; then
-    printf "\n${C2}Clean ports and IPs${C0} (one per line, empty line to finish):\n" >"$TTY"
-    printf "  PORT_IPS[8443]=\"104.21.0.1,172.67.0.2\"\n" >"$TTY"
+    printf "\n${C2}Clean (CDN) IPs and ports${C0}\n" >"$TTY"
+    printf "  You add them one group at a time.\n" >"$TTY"
+    printf "  For each port you may enter several IPs separated by comma.\n" >"$TTY"
+    printf "  Leave the port empty and press Enter to finish.\n\n" >"$TTY"
     while true; do
-      local line; read -r line <"$TTY" || break
-      [ -z "$line" ] && break
-      if [[ "$line" =~ ^PORT_IPS\[([0-9]+)\]=\"?([^\"]*)\"?$ ]]; then
-        PORT_IPS["${BASH_REMATCH[1]}"]="${BASH_REMATCH[2]}"
-      elif [[ "$line" =~ ^([0-9]+)[[:space:]:]+(.+)$ ]]; then
-        PORT_IPS["${BASH_REMATCH[1]}"]="${BASH_REMATCH[2]}"
-      else
-        warn "Invalid line skipped: $line"
-      fi
+      ask _p "Port (empty = finish)" ""
+      [ -z "${_p:-}" ] && break
+      if ! [[ "$_p" =~ ^[0-9]+$ ]]; then warn "Port must be a number"; continue; fi
+      ask _ips "IPs/domains for port ${_p} (comma separated)" "$DOMAIN"
+      PORT_IPS["$_p"]="$_ips"
+      ok "Added: port ${_p} -> ${_ips}"
     done
     [ "${#PORT_IPS[@]}" -gt 0 ] || PORT_IPS["${NGINX_PORT}"]="$DOMAIN"
   fi
@@ -112,7 +104,6 @@ collect_inputs(){
   ask CONFIG_NAME "A name for your configs" "MyVPN"
 }
 
-# 4) Install cores
 install_cores(){
   log "Installing Xray ..."
   bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install >/dev/null
@@ -131,7 +122,6 @@ install_cores(){
   if [ "${HY2_CERT:-}" = "le" ]; then apt-get install -y certbot >/dev/null; fi
 }
 
-# 5) Secrets
 gen_secrets(){
   UUID="$(cat /proc/sys/kernel/random/uuid)"
   if $WANT_REALITY; then
@@ -143,7 +133,6 @@ gen_secrets(){
   $WANT_HY2 && HY2_PASS="$(rand 16)"
 }
 
-# 6) Certificates
 setup_certs(){
   if $USE_DOMAIN; then
     mkdir -p /etc/ssl/cdn
@@ -170,7 +159,6 @@ setup_certs(){
   fi
 }
 
-# 7) Xray config
 write_xray(){
   local ib=()
   if $WANT_REALITY; then
@@ -192,7 +180,6 @@ write_xray(){
 EOF
 }
 
-# 8) Hysteria2 config
 write_hysteria(){
   free_port "$HY2_PORT" udp
   cat >/etc/hysteria/config.yaml <<EOF
@@ -211,7 +198,6 @@ masquerade:
 EOF
 }
 
-# 9) Nginx config
 write_nginx(){
   local LISTENS="" ; declare -A seen
   for p in "$NGINX_PORT" "${!PORT_IPS[@]}"; do
@@ -220,12 +206,18 @@ write_nginx(){
     LISTENS+="    listen ${p} ssl;"$'\n'
     LISTENS+="    listen [::]:${p} ssl;"$'\n'
   done
+  mkdir -p /var/www/sub
   cat >/etc/nginx/conf.d/vpn.conf <<EOF
 server {
 ${LISTENS}    server_name ${DOMAIN};
     ssl_certificate     /etc/ssl/cdn/cert.pem;
     ssl_certificate_key /etc/ssl/cdn/key.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
+    location /sub/ {
+        alias /var/www/sub/;
+        default_type text/plain;
+        add_header Content-Type "text/plain; charset=utf-8";
+    }
     location /${WS_PATH} {
         proxy_pass http://127.0.0.1:${WS_PORT};
         proxy_http_version 1.1;
@@ -248,7 +240,6 @@ EOF
   rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 }
 
-# 10) Firewall
 setup_fw(){
   ufw allow 22/tcp >/dev/null 2>&1 || true
   $WANT_REALITY && ufw allow "${REALITY_PORT}/tcp" >/dev/null 2>&1 || true
@@ -260,7 +251,6 @@ setup_fw(){
   yes | ufw enable >/dev/null 2>&1 || true
 }
 
-# 11) Services
 start_all(){
   systemctl enable --now xray >/dev/null 2>&1 || true
   systemctl restart xray
@@ -268,26 +258,43 @@ start_all(){
   if $USE_DOMAIN; then nginx -t && systemctl enable --now nginx >/dev/null 2>&1 || true; systemctl restart nginx; fi
 }
 
-# 12) Links
 OUT="/root/${CONFIG_NAME:-vpn}-configs.txt"
+LINKS=()
 gen_links(){
-  : > "$OUT"
-  echo "===== ${CONFIG_NAME} =====" >> "$OUT"
   if $WANT_REALITY; then
-    echo "vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=none&security=reality&type=tcp&sni=${SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}&flow=xtls-rprx-vision#${CONFIG_NAME}-Reality" >> "$OUT"
+    LINKS+=("vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=none&security=reality&type=tcp&sni=${SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}&flow=xtls-rprx-vision#${CONFIG_NAME}-Reality")
   fi
   if $WANT_HY2; then
-    echo "hysteria2://${HY2_PASS}@${HY2_CONN}:${HY2_PORT}?sni=${HY2_SNI}&insecure=${HY2_INSECURE}#${CONFIG_NAME}-HY2" >> "$OUT"
+    LINKS+=("hysteria2://${HY2_PASS}@${HY2_CONN}:${HY2_PORT}?sni=${HY2_SNI}&insecure=${HY2_INSECURE}#${CONFIG_NAME}-HY2")
   fi
   if $WANT_WS || $WANT_XHTTP; then
     for port in "${!PORT_IPS[@]}"; do
       IFS=',' read -ra ips <<< "${PORT_IPS[$port]}"
       for ip in "${ips[@]}"; do
         ip="$(echo "$ip" | tr -d ' ')"; [ -z "$ip" ] && continue
-        $WANT_WS && echo "vless://${UUID}@${ip}:${port}?encryption=none&security=tls&type=ws&host=${DOMAIN}&sni=${DOMAIN}&path=%2F${WS_PATH}#${CONFIG_NAME}-WS-${ip}" >> "$OUT"
-        $WANT_XHTTP && echo "vless://${UUID}@${ip}:${port}?encryption=none&security=tls&type=xhttp&host=${DOMAIN}&sni=${DOMAIN}&path=%2F${XH_PATH}&mode=auto#${CONFIG_NAME}-XH-${ip}" >> "$OUT"
+        $WANT_WS && LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&type=ws&host=${DOMAIN}&sni=${DOMAIN}&path=%2F${WS_PATH}#${CONFIG_NAME}-WS-${ip}")
+        $WANT_XHTTP && LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&type=xhttp&host=${DOMAIN}&sni=${DOMAIN}&path=%2F${XH_PATH}&mode=auto#${CONFIG_NAME}-XH-${ip}")
       done
     done
+  fi
+  : > "$OUT"
+  echo "===== ${CONFIG_NAME} =====" >> "$OUT"
+  printf '%s\n' "${LINKS[@]}" >> "$OUT"
+}
+
+SUB_URL=""
+gen_subscription(){
+  if $USE_DOMAIN && [ "${#LINKS[@]}" -gt 0 ]; then
+    local token; token="$(rand 12)"
+    mkdir -p /var/www/sub
+    printf '%s\n' "${LINKS[@]}" | base64 -w0 > "/var/www/sub/${token}"
+    chmod 644 "/var/www/sub/${token}"
+    SUB_URL="https://${DOMAIN}:${NGINX_PORT}/sub/${token}"
+    {
+      echo ""
+      echo "===== Subscription ====="
+      echo "$SUB_URL"
+    } >> "$OUT"
   fi
 }
 
@@ -295,11 +302,14 @@ summary(){
   printf "\n${C2}========== Done ==========${C0}\n"
   ok "Configs saved to: ${OUT}"
   echo; cat "$OUT"; echo
+  if [ -n "$SUB_URL" ]; then
+    printf "${C2}Subscription link (add this in your client):${C0}\n" 
+    printf "  %s\n\n" "$SUB_URL"
+  fi
   $USE_DOMAIN && warn "In Cloudflare: CDN domain orange-cloud, SSL/TLS set to Full"
   [ "${HY2_CERT:-}" = "le" ] && warn "Subdomain ${HY2_DOMAIN} must be grey-cloud (DNS only)"
 }
 
-# Run
 need_root
 install_base
 menu_mode
@@ -313,4 +323,5 @@ $USE_DOMAIN && write_nginx
 setup_fw
 start_all
 gen_links
+gen_subscription
 summary
