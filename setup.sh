@@ -382,11 +382,11 @@ server {
 ${ws_block}
 ${xh_block}
 
-    location = /sub/${SUB_TOKEN} {
-        default_type text/plain;
-        alias /var/www/sub/${SUB_TOKEN}.txt;
-    }
-
+location /sub/ {
+    root /var/www;
+    default_type text/plain;
+    try_files $uri $uri.txt =404;
+}
     location / {
         root /var/www/html;
         index index.html;
