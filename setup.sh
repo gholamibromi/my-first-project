@@ -1,327 +1,486 @@
 #!/usr/bin/env bash
-#==============================================================================
-#  All-in-one VPN : VLESS-WS / VLESS-XHTTP / VLESS-Reality / Hysteria2
-#  Interactive installer with subscription link support.
-#==============================================================================
+# نصب چندپروتکلی: VLESS-WS / VLESS-XHTTP / VLESS-Reality / Hysteria2
+# UI انگلیسی، کامنت‌ها فارسی. ورودی از /dev/tty خوانده می‌شود.
 set -euo pipefail
 
-C0='\033[0m'; C1='\033[1;36m'; C2='\033[1;32m'; C3='\033[1;33m'; C4='\033[1;31m'
-log(){  printf "${C1}[*]${C0} %s\n" "$*"; }
-ok(){   printf "${C2}[+]${C0} %s\n" "$*"; }
-warn(){ printf "${C3}[!]${C0} %s\n" "$*"; }
-die(){  printf "${C4}[x]${C0} %s\n" "$*" >&2; exit 1; }
-
+# ---------- رنگ‌ها و TTY ----------
+C0=$'\033[0m'; C1=$'\033[36m'; C2=$'\033[1;33m'; CR=$'\033[31m'; CG=$'\033[32m'
 TTY=/dev/tty
-[ -r "$TTY" ] || TTY=/dev/stdin
 
+ok(){   printf "${CG}[ok]${C0} %s\n" "$*" >"$TTY"; }
+warn(){ printf "${C2}[warn]${C0} %s\n" "$*" >"$TTY"; }
+die(){  printf "${CR}[err]${C0} %s\n" "$*" >"$TTY"; exit 1; }
+
+# تابع پرسش: نام متغیر، متن، مقدار پیش‌فرض
 ask(){
-  local __v="$1" __p="$2" __d="${3:-}" __a
-  if [ -n "$__d" ]; then printf "${C3}%s${C0} [%s]: " "$__p" "$__d" >"$TTY"
-  else printf "${C3}%s${C0}: " "$__p" >"$TTY"; fi
-  read -r __a <"$TTY" || true
-  [ -z "$__a" ] && __a="$__d"
-  printf -v "$__v" '%s' "$__a"
+  local __var="$1" __prompt="$2" __default="${3:-}" __ans=""
+  if [ -n "$__default" ]; then
+    printf "${C1}? ${C0}%s [%s]: " "$__prompt" "$__default" >"$TTY"
+  else
+    printf "${C1}? ${C0}%s: " "$__prompt" >"$TTY"
+  fi
+  read -r __ans <"$TTY" || true
+  [ -z "$__ans" ] && __ans="$__default"
+  printf -v "$__var" '%s' "$__ans"
 }
-rand(){ openssl rand -hex "${1:-8}"; }
-free_port(){ fuser -k "${1}/${2:-tcp}" 2>/dev/null || true; }
 
-WS_PORT=10002
-XH_PORT=10001
-WS_PATH="wsvpn"
-XH_PATH="xhvpn"
-declare -A PORT_IPS
+# ---------- ثابت‌ها ----------
+WS_INT=10001          # پورت داخلی WebSocket
+XHTTP_INT=10002       # پورت داخلی XHTTP
+HY2_SNI="www.bing.com"
 
-WANT_REALITY=false; WANT_WS=false; WANT_XHTTP=false; WANT_HY2=false
+# ---------- وضعیت‌ها ----------
+WANT_WS=false; WANT_XHTTP=false; WANT_REALITY=false; WANT_HY2=false
 USE_DOMAIN=false
+declare -A PORT_IPS
+LINKS=()
 
-need_root(){ [ "$(id -u)" -eq 0 ] || die "Run as root (sudo -i)"; }
+# ---------- بررسی روت ----------
+[ "$(id -u)" = 0 ] || die "Please run as root."
 
-install_base(){
-  log "Updating system and installing prerequisites ..."
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update -y
-  apt-get upgrade -y
-  apt-get install -y curl wget openssl jq ufw socat ca-certificates psmisc coreutils >/dev/null 2>&1
-  ok "Prerequisites installed"
+# ---------- تشخیص پکیج‌منیجر ----------
+PKG=""
+command -v apt-get >/dev/null 2>&1 && PKG=apt
+command -v dnf     >/dev/null 2>&1 && PKG=dnf
+command -v yum     >/dev/null 2>&1 && [ -z "$PKG" ] && PKG=yum
+[ -n "$PKG" ] || die "No supported package manager found."
+
+install_deps(){
+  case "$PKG" in
+    apt)
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -y
+      apt-get install -y curl openssl jq nginx certbot ufw ca-certificates
+      ;;
+    dnf|yum)
+      $PKG install -y curl openssl jq nginx certbot ufw ca-certificates || true
+      ;;
+  esac
+  # نصب Xray از مخزن رسمی
+  if ! command -v xray >/dev/null 2>&1; then
+    bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+  fi
+  # نصب Hysteria2 فقط در صورت نیاز
+  if $WANT_HY2 && ! command -v hysteria >/dev/null 2>&1; then
+    bash <(curl -fsSL https://get.hy2.sh/)
+  fi
+  ok "Dependencies installed."
 }
 
+# ---------- منوی انتخاب پروتکل ----------
 menu_mode(){
-  printf "\n${C2}=== Select config type ===${C0}\n" >"$TTY"
-  printf "  1) Without domain  (Reality)\n" >"$TTY"
-  printf "  2) With domain     (VLESS-WS + VLESS-XHTTP + Hysteria2)\n" >"$TTY"
-  printf "  3) Both            (All protocols)\n" >"$TTY"
+  printf "\n${C2}=== Select protocols ===${C0}\n" >"$TTY"
+  printf "  1) All (WS + XHTTP + Reality + Hysteria2)\n" >"$TTY"
+  printf "  2) CDN only (WS + XHTTP)\n" >"$TTY"
+  printf "  3) Reality only\n" >"$TTY"
+  printf "  4) Hysteria2 only\n" >"$TTY"
+  printf "  5) Custom\n" >"$TTY"
   ask MODE "Choice" "1"
   case "$MODE" in
-    1) WANT_REALITY=true ;;
-    2) WANT_WS=true; WANT_XHTTP=true; WANT_HY2=true; USE_DOMAIN=true ;;
-    3) WANT_REALITY=true; WANT_WS=true; WANT_XHTTP=true; WANT_HY2=true; USE_DOMAIN=true ;;
-    *) die "Invalid option" ;;
+    1) WANT_WS=true; WANT_XHTTP=true; WANT_REALITY=true; WANT_HY2=true ;;
+    2) WANT_WS=true; WANT_XHTTP=true ;;
+    3) WANT_REALITY=true ;;
+    4) WANT_HY2=true ;;
+    5)
+      local a
+      ask a "Enable VLESS-WS? (y/n)" "y";    [ "$a" = y ] && WANT_WS=true
+      ask a "Enable VLESS-XHTTP? (y/n)" "y"; [ "$a" = y ] && WANT_XHTTP=true
+      ask a "Enable Reality? (y/n)" "y";     [ "$a" = y ] && WANT_REALITY=true
+      ask a "Enable Hysteria2? (y/n)" "y";   [ "$a" = y ] && WANT_HY2=true
+      ;;
+    *) die "Invalid choice" ;;
   esac
+  # WS و XHTTP به دامنه/CDN نیاز دارند
+  if $WANT_WS || $WANT_XHTTP; then USE_DOMAIN=true; fi
+  $WANT_WS || $WANT_XHTTP || $WANT_REALITY || $WANT_HY2 || die "Nothing selected."
 }
 
+# ---------- جمع‌آوری اکسترنال پروکسی (تک‌خطی) ----------
+collect_external_proxies(){
+  printf "\n${C2}External (CDN clean) proxies${C0}\n" >"$TTY"
+  printf "  Syntax:  port:ip1,ip2,ip3;port:ip1,ip2\n" >"$TTY"
+  printf "  Example: 2096:1.1.1.1,2.2.2.2;8443:cdn.example.com\n" >"$TTY"
+  printf "  Leave empty to skip.\n" >"$TTY"
+  ask EXT "External proxies" ""
+  if [ -n "${EXT:-}" ]; then
+    # هر گروه با ; جدا می‌شود، فرمت هر گروه port:ipها
+    local groups g port ips
+    IFS=';' read -ra groups <<< "$EXT"
+    for g in "${groups[@]}"; do
+      g="$(echo "$g" | tr -d ' ')"
+      [ -z "$g" ] && continue
+      port="${g%%:*}"; ips="${g#*:}"
+      if [[ "$port" =~ ^[0-9]+$ ]] && [ -n "$ips" ]; then
+        PORT_IPS["$port"]="$ips"
+        ok "Added: port ${port} -> ${ips}"
+      else
+        warn "Skipped invalid entry: ${g}"
+      fi
+    done
+  fi
+}
+
+# ---------- جمع‌آوری همه ورودی‌ها ----------
 collect_inputs(){
   SERVER_IP="$(curl -fsSL https://api.ipify.org || hostname -I | awk '{print $1}')"
 
+  # مقادیر پیش‌فرض پورت‌ها
+  NGINX_PORT=2096
+  HY2_PORT=36712
+  REALITY_PORT=8443
+
+  printf "\n${C2}=== Ports ===${C0}\n" >"$TTY"
+  printf "  1) Use defaults (Nginx 2096, Hysteria2 36712, Reality 8443)\n" >"$TTY"
+  printf "  2) Customize ports\n" >"$TTY"
+  ask PORT_MODE "Choice" "1"
+
+  if [ "$PORT_MODE" = "2" ]; then
+    if $USE_DOMAIN; then
+      ask NGINX_PORT "Nginx port (CDN origin: 443/2053/2083/2087/2096/8443)" "2096"
+    fi
+    if $WANT_HY2;     then ask HY2_PORT "Hysteria2 port (UDP)" "36712"; fi
+    if $WANT_REALITY; then ask REALITY_PORT "Reality port (direct TCP)" "8443"; fi
+  fi
+
+  # دامنه فقط برای WS/XHTTP الزامی است
   if $USE_DOMAIN; then
     ask DOMAIN "Domain for WS/XHTTP (Cloudflare orange-cloud)"
-    [ -n "${DOMAIN:-}" ] || die "Domain is required"
+    [ -n "${DOMAIN:-}" ] || die "Domain is required for WS/XHTTP."
+  fi
 
+  # گواهی Hysteria2
+  if $WANT_HY2; then
     printf "\n${C2}Hysteria2 certificate:${C0} 1) self-signed  2) Let's Encrypt\n" >"$TTY"
     ask HY2_CERT_CH "Choice" "1"
     if [ "$HY2_CERT_CH" = "2" ]; then
       HY2_CERT="le"
       ask HY2_DOMAIN "Hysteria2 subdomain (grey-cloud / DNS only)"
-      ask LE_EMAIL "Email for Let's Encrypt"
+      ask LE_EMAIL   "Email for Let's Encrypt"
+      [ -n "${HY2_DOMAIN:-}" ] || die "Hysteria2 domain required for Let's Encrypt."
     else
       HY2_CERT="self"
     fi
-
-    ask NGINX_PORT "Nginx port (CDN origin: 443/2053/2083/2087/2096/8443)" "2096"
-    ask HY2_PORT "Hysteria2 port (UDP)" "36712"
   fi
 
+  # SNI فقط برای Reality
   if $WANT_REALITY; then
-    ask REALITY_PORT "Reality port (direct TCP)" "8443"
     ask SNI "SNI/destination for Reality (a real website)" "www.microsoft.com"
   fi
 
+  # اکسترنال پروکسی‌ها با سینتکس تک‌خطی
   if $WANT_WS || $WANT_XHTTP; then
-    printf "\n${C2}Clean (CDN) IPs and ports${C0}\n" >"$TTY"
-    printf "  You add them one group at a time.\n" >"$TTY"
-    printf "  For each port you may enter several IPs separated by comma.\n" >"$TTY"
-    printf "  Leave the port empty and press Enter to finish.\n\n" >"$TTY"
-    while true; do
-      ask _p "Port (empty = finish)" ""
-      [ -z "${_p:-}" ] && break
-      if ! [[ "$_p" =~ ^[0-9]+$ ]]; then warn "Port must be a number"; continue; fi
-      ask _ips "IPs/domains for port ${_p} (comma separated)" "$DOMAIN"
-      PORT_IPS["$_p"]="$_ips"
-      ok "Added: port ${_p} -> ${_ips}"
-    done
-    [ "${#PORT_IPS[@]}" -gt 0 ] || PORT_IPS["${NGINX_PORT}"]="$DOMAIN"
+    collect_external_proxies
+    # اگر کاربر چیزی وارد نکرد، خود دامنه روی پورت Nginx استفاده می‌شود
+    if [ "${#PORT_IPS[@]}" -eq 0 ]; then
+      PORT_IPS["$NGINX_PORT"]="$DOMAIN"
+      warn "No external proxies added. Using domain ${DOMAIN} directly on port ${NGINX_PORT}."
+    fi
   fi
 
   ask CONFIG_NAME "A name for your configs" "MyVPN"
 }
 
-install_cores(){
-  log "Installing Xray ..."
-  bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install >/dev/null
-  ok "Xray installed"
-  if $WANT_HY2; then
-    log "Installing Hysteria2 ..."
-    bash <(curl -fsSL https://get.hy2.sh/) >/dev/null
-    ok "Hysteria2 installed"
-  fi
-  if $USE_DOMAIN; then
-    log "Installing Nginx ..."
-    apt-get install -y nginx >/dev/null
-    systemctl stop nginx 2>/dev/null || true
-    ok "Nginx installed"
-  fi
-  if [ "${HY2_CERT:-}" = "le" ]; then apt-get install -y certbot >/dev/null; fi
-}
-
+# ---------- تولید کلید/شناسه‌ها ----------
 gen_secrets(){
-  UUID="$(cat /proc/sys/kernel/random/uuid)"
+  UUID="$(xray uuid)"
+  WS_PATH="/$(openssl rand -hex 4)-ws"
+  XHTTP_PATH="/$(openssl rand -hex 4)-xh"
+  SUB_TOKEN="$(openssl rand -hex 16)"
+  HY2_PASS="$(openssl rand -hex 12)"
+
   if $WANT_REALITY; then
-    local kp; kp="$(xray x25519)"
-    REALITY_PRIV="$(echo "$kp" | grep -i private | awk '{print $NF}')"
-    REALITY_PUB="$(echo "$kp"  | grep -i public  | awk '{print $NF}')"
-    REALITY_SID="$(rand 8)"
+    local keys
+    keys="$(xray x25519)"
+    REALITY_PRIV="$(echo "$keys" | grep -i 'private' | awk '{print $NF}')"
+    REALITY_PUB="$(echo "$keys"  | grep -i 'public'  | awk '{print $NF}')"
+    REALITY_SID="$(openssl rand -hex 8)"
   fi
-  $WANT_HY2 && HY2_PASS="$(rand 16)"
+  ok "Secrets generated."
+}
+# ---------- ساخت کانفیگ Xray ----------
+write_xray(){
+  local inbounds=() joined
+  mkdir -p /usr/local/etc/xray
+
+  if $WANT_WS; then
+    inbounds+=("$(cat <<EOF
+{
+  "listen": "127.0.0.1",
+  "port": ${WS_INT},
+  "protocol": "vless",
+  "settings": { "clients": [ { "id": "${UUID}" } ], "decryption": "none" },
+  "streamSettings": { "network": "ws", "wsSettings": { "path": "${WS_PATH}" } }
+}
+EOF
+)")
+  fi
+
+  if $WANT_XHTTP; then
+    inbounds+=("$(cat <<EOF
+{
+  "listen": "127.0.0.1",
+  "port": ${XHTTP_INT},
+  "protocol": "vless",
+  "settings": { "clients": [ { "id": "${UUID}" } ], "decryption": "none" },
+  "streamSettings": { "network": "xhttp", "xhttpSettings": { "path": "${XHTTP_PATH}" } }
+}
+EOF
+)")
+  fi
+
+  if $WANT_REALITY; then
+    inbounds+=("$(cat <<EOF
+{
+  "listen": "0.0.0.0",
+  "port": ${REALITY_PORT},
+  "protocol": "vless",
+  "settings": {
+    "clients": [ { "id": "${UUID}", "flow": "xtls-rprx-vision" } ],
+    "decryption": "none"
+  },
+  "streamSettings": {
+    "network": "tcp",
+    "security": "reality",
+    "realitySettings": {
+      "show": false,
+      "dest": "${SNI}:443",
+      "xver": 0,
+      "serverNames": [ "${SNI}" ],
+      "privateKey": "${REALITY_PRIV}",
+      "shortIds": [ "${REALITY_SID}" ]
+    }
+  }
+}
+EOF
+)")
+  fi
+
+  joined="$(IFS=,; echo "${inbounds[*]}")"
+  cat > /usr/local/etc/xray/config.json <<EOF
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [ ${joined} ],
+  "outbounds": [ { "protocol": "freedom", "tag": "direct" } ]
+}
+EOF
+
+  xray -test -config /usr/local/etc/xray/config.json >"$TTY" 2>&1 || die "Xray config test failed."
+  ok "Xray config written."
 }
 
-setup_certs(){
-  if $USE_DOMAIN; then
-    mkdir -p /etc/ssl/cdn
+# ---------- ساخت کانفیگ Nginx ----------
+write_nginx(){
+  $USE_DOMAIN || return 0
+  mkdir -p /etc/ssl/xray /var/www/html /var/www/sub
+
+  # گواهی self-signed برای Nginx (سازگار با Cloudflare Full)
+  if [ ! -f /etc/ssl/xray/cert.pem ]; then
     openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-      -keyout /etc/ssl/cdn/key.pem -out /etc/ssl/cdn/cert.pem \
+      -keyout /etc/ssl/xray/key.pem -out /etc/ssl/xray/cert.pem \
       -days 3650 -subj "/CN=${DOMAIN}" >/dev/null 2>&1
   fi
-  if $WANT_HY2; then
-    mkdir -p /etc/hysteria
-    if [ "$HY2_CERT" = "le" ]; then
-      free_port 80 tcp
-      certbot certonly --standalone --non-interactive --agree-tos \
-        -m "$LE_EMAIL" -d "$HY2_DOMAIN"
-      HY2_CRT="/etc/letsencrypt/live/${HY2_DOMAIN}/fullchain.pem"
-      HY2_KEY="/etc/letsencrypt/live/${HY2_DOMAIN}/privkey.pem"
-      HY2_SNI="$HY2_DOMAIN"; HY2_CONN="$HY2_DOMAIN"; HY2_INSECURE=0
-    else
-      openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-        -keyout /etc/hysteria/key.pem -out /etc/hysteria/cert.pem \
-        -days 3650 -subj "/CN=${DOMAIN:-bing.com}" >/dev/null 2>&1
-      HY2_CRT="/etc/hysteria/cert.pem"; HY2_KEY="/etc/hysteria/key.pem"
-      HY2_SNI="${DOMAIN:-bing.com}"; HY2_CONN="$SERVER_IP"; HY2_INSECURE=1
-    fi
-  fi
-}
 
-write_xray(){
-  local ib=()
-  if $WANT_REALITY; then
-    free_port "$REALITY_PORT" tcp
-    ib+=("{\"tag\":\"reality\",\"listen\":\"0.0.0.0\",\"port\":${REALITY_PORT},\"protocol\":\"vless\",\"settings\":{\"clients\":[{\"id\":\"${UUID}\",\"flow\":\"xtls-rprx-vision\"}],\"decryption\":\"none\"},\"streamSettings\":{\"network\":\"tcp\",\"security\":\"reality\",\"realitySettings\":{\"show\":false,\"dest\":\"${SNI}:443\",\"xver\":0,\"serverNames\":[\"${SNI}\"],\"privateKey\":\"${REALITY_PRIV}\",\"shortIds\":[\"${REALITY_SID}\"]}}}")
-  fi
+  # صفحه پوششی ساده
+  echo "<html><body><h1>It works.</h1></body></html>" > /var/www/html/index.html
+
+  # حذف سایت پیش‌فرض دبیان در صورت وجود
+  rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+
+  local ws_block="" xh_block=""
   if $WANT_WS; then
-    ib+=("{\"tag\":\"ws\",\"listen\":\"127.0.0.1\",\"port\":${WS_PORT},\"protocol\":\"vless\",\"settings\":{\"clients\":[{\"id\":\"${UUID}\"}],\"decryption\":\"none\"},\"streamSettings\":{\"network\":\"ws\",\"wsSettings\":{\"path\":\"/${WS_PATH}\"}}}")
-  fi
-  if $WANT_XHTTP; then
-    ib+=("{\"tag\":\"xhttp\",\"listen\":\"127.0.0.1\",\"port\":${XH_PORT},\"protocol\":\"vless\",\"settings\":{\"clients\":[{\"id\":\"${UUID}\"}],\"decryption\":\"none\"},\"streamSettings\":{\"network\":\"xhttp\",\"xhttpSettings\":{\"path\":\"/${XH_PATH}\"}}}")
-  fi
-  local joined; joined=$(IFS=,; echo "${ib[*]}")
-  mkdir -p /usr/local/etc/xray
-  cat >/usr/local/etc/xray/config.json <<EOF
-{"log":{"loglevel":"warning"},
-"inbounds":[${joined}],
-"outbounds":[{"protocol":"freedom","tag":"direct"}]}
-EOF
-}
-
-write_hysteria(){
-  free_port "$HY2_PORT" udp
-  cat >/etc/hysteria/config.yaml <<EOF
-listen: :${HY2_PORT}
-tls:
-  cert: ${HY2_CRT}
-  key: ${HY2_KEY}
-auth:
-  type: password
-  password: ${HY2_PASS}
-masquerade:
-  type: proxy
-  proxy:
-    url: https://news.ycombinator.com/
-    rewriteHost: true
-EOF
-}
-
-write_nginx(){
-  local LISTENS="" ; declare -A seen
-  for p in "$NGINX_PORT" "${!PORT_IPS[@]}"; do
-    [ -n "${seen[$p]:-}" ] && continue; seen[$p]=1
-    free_port "$p" tcp
-    LISTENS+="    listen ${p} ssl;"$'\n'
-    LISTENS+="    listen [::]:${p} ssl;"$'\n'
-  done
-  mkdir -p /var/www/sub
-  cat >/etc/nginx/conf.d/vpn.conf <<EOF
-server {
-${LISTENS}    server_name ${DOMAIN};
-    ssl_certificate     /etc/ssl/cdn/cert.pem;
-    ssl_certificate_key /etc/ssl/cdn/key.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    location /sub/ {
-        alias /var/www/sub/;
-        default_type text/plain;
-        add_header Content-Type "text/plain; charset=utf-8";
-    }
-    location /${WS_PATH} {
-        proxy_pass http://127.0.0.1:${WS_PORT};
+    ws_block=$(cat <<EOF
+    location ${WS_PATH} {
+        if (\$http_upgrade != "websocket") { return 404; }
+        proxy_pass http://127.0.0.1:${WS_INT};
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
     }
-    location /${XH_PATH} {
-        proxy_pass http://127.0.0.1:${XH_PORT};
+EOF
+)
+  fi
+  if $WANT_XHTTP; then
+    xh_block=$(cat <<EOF
+    location ${XHTTP_PATH} {
+        proxy_pass http://127.0.0.1:${XHTTP_INT};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_buffering off;
         proxy_request_buffering off;
+        client_max_body_size 0;
     }
-    location / { return 200 "ok"; }
+EOF
+)
+  fi
+
+  cat > /etc/nginx/conf.d/xray.conf <<EOF
+server {
+    listen ${NGINX_PORT} ssl;
+    listen [::]:${NGINX_PORT} ssl;
+    server_name ${DOMAIN};
+
+    ssl_certificate     /etc/ssl/xray/cert.pem;
+    ssl_certificate_key /etc/ssl/xray/key.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+${ws_block}
+${xh_block}
+
+    location = /sub/${SUB_TOKEN} {
+        default_type text/plain;
+        alias /var/www/sub/${SUB_TOKEN}.txt;
+    }
+
+    location / {
+        root /var/www/html;
+        index index.html;
+    }
 }
 EOF
-  rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+
+  nginx -t >"$TTY" 2>&1 || die "Nginx config test failed."
+  ok "Nginx config written."
 }
 
-setup_fw(){
-  ufw allow 22/tcp >/dev/null 2>&1 || true
-  $WANT_REALITY && ufw allow "${REALITY_PORT}/tcp" >/dev/null 2>&1 || true
-  if $WANT_HY2; then ufw allow "${HY2_PORT}/udp" >/dev/null 2>&1 || true; fi
-  if $USE_DOMAIN; then
-    for p in "$NGINX_PORT" "${!PORT_IPS[@]}"; do ufw allow "${p}/tcp" >/dev/null 2>&1 || true; done
-    [ "${HY2_CERT:-}" = "le" ] && ufw allow 80/tcp >/dev/null 2>&1 || true
+# ---------- ساخت کانفیگ Hysteria2 ----------
+write_hysteria(){
+  $WANT_HY2 || return 0
+  mkdir -p /etc/hysteria
+
+  local cert_path key_path
+  if [ "$HY2_CERT" = "le" ]; then
+    systemctl stop nginx 2>/dev/null || true
+    certbot certonly --standalone -d "$HY2_DOMAIN" \
+      --non-interactive --agree-tos -m "$LE_EMAIL" || die "Let's Encrypt failed."
+    cert_path="/etc/letsencrypt/live/${HY2_DOMAIN}/fullchain.pem"
+    key_path="/etc/letsencrypt/live/${HY2_DOMAIN}/privkey.pem"
+  else
+    openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+      -keyout /etc/hysteria/key.pem -out /etc/hysteria/cert.pem \
+      -days 3650 -subj "/CN=${HY2_SNI}" >/dev/null 2>&1
+    cert_path="/etc/hysteria/cert.pem"
+    key_path="/etc/hysteria/key.pem"
   fi
-  yes | ufw enable >/dev/null 2>&1 || true
+
+  cat > /etc/hysteria/config.yaml <<EOF
+listen: :${HY2_PORT}
+
+tls:
+  cert: ${cert_path}
+  key: ${key_path}
+
+auth:
+  type: password
+  password: ${HY2_PASS}
+
+masquerade:
+  type: proxy
+  proxy:
+    url: https://${HY2_SNI}
+    rewriteHost: true
+EOF
+  ok "Hysteria2 config written."
 }
 
-start_all(){
-  systemctl enable --now xray >/dev/null 2>&1 || true
-  systemctl restart xray
-  if $WANT_HY2; then systemctl enable --now hysteria-server >/dev/null 2>&1 || systemctl restart hysteria-server; fi
-  if $USE_DOMAIN; then nginx -t && systemctl enable --now nginx >/dev/null 2>&1 || true; systemctl restart nginx; fi
-}
-
-OUT="/root/${CONFIG_NAME:-vpn}-configs.txt"
-LINKS=()
+# ---------- تولید لینک‌ها ----------
 gen_links(){
-  if $WANT_REALITY; then
-    LINKS+=("vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=none&security=reality&type=tcp&sni=${SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}&flow=xtls-rprx-vision#${CONFIG_NAME}-Reality")
-  fi
-  if $WANT_HY2; then
-    LINKS+=("hysteria2://${HY2_PASS}@${HY2_CONN}:${HY2_PORT}?sni=${HY2_SNI}&insecure=${HY2_INSECURE}#${CONFIG_NAME}-HY2")
-  fi
-  if $WANT_WS || $WANT_XHTTP; then
+  local enc_ws enc_xh port ips ip
+  enc_ws="$(printf '%s' "${WS_PATH:-}"   | sed 's:/:%2F:g')"
+  enc_xh="$(printf '%s' "${XHTTP_PATH:-}" | sed 's:/:%2F:g')"
+
+  if { $WANT_WS || $WANT_XHTTP; } && [ "${#PORT_IPS[@]}" -gt 0 ]; then
     for port in "${!PORT_IPS[@]}"; do
-      IFS=',' read -ra ips <<< "${PORT_IPS[$port]}"
-      for ip in "${ips[@]}"; do
-        ip="$(echo "$ip" | tr -d ' ')"; [ -z "$ip" ] && continue
-        $WANT_WS && LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&type=ws&host=${DOMAIN}&sni=${DOMAIN}&path=%2F${WS_PATH}#${CONFIG_NAME}-WS-${ip}")
-        $WANT_XHTTP && LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&type=xhttp&host=${DOMAIN}&sni=${DOMAIN}&path=%2F${XH_PATH}&mode=auto#${CONFIG_NAME}-XH-${ip}")
+      IFS=',' read -ra _ips <<< "${PORT_IPS[$port]}"
+      for ip in "${_ips[@]}"; do
+        [ -z "$ip" ] && continue
+        if $WANT_WS; then
+          LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=chrome&type=ws&host=${DOMAIN}&path=${enc_ws}#${CONFIG_NAME}-WS-${ip}")
+        fi
+        if $WANT_XHTTP; then
+          LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=chrome&type=xhttp&host=${DOMAIN}&path=${enc_xh}#${CONFIG_NAME}-XHTTP-${ip}")
+        fi
       done
     done
   fi
-  : > "$OUT"
-  echo "===== ${CONFIG_NAME} =====" >> "$OUT"
-  printf '%s\n' "${LINKS[@]}" >> "$OUT"
+
+  if $WANT_REALITY; then
+    LINKS+=("vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=none&security=reality&sni=${SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}&flow=xtls-rprx-vision&type=tcp#${CONFIG_NAME}-Reality")
+  fi
+
+  if $WANT_HY2; then
+    local h_host h_sni h_ins
+    if [ "$HY2_CERT" = "le" ]; then
+      h_host="$HY2_DOMAIN"; h_sni="$HY2_DOMAIN"; h_ins=0
+    else
+      h_host="$SERVER_IP"; h_sni="$HY2_SNI"; h_ins=1
+    fi
+    LINKS+=("hysteria2://${HY2_PASS}@${h_host}:${HY2_PORT}/?sni=${h_sni}&insecure=${h_ins}#${CONFIG_NAME}-HY2")
+  fi
 }
 
-SUB_URL=""
+# ---------- ساخت لینک اشتراک (Base64) ----------
 gen_subscription(){
-  if $USE_DOMAIN && [ "${#LINKS[@]}" -gt 0 ]; then
-    local token; token="$(rand 12)"
-    mkdir -p /var/www/sub
-    printf '%s\n' "${LINKS[@]}" | base64 -w0 > "/var/www/sub/${token}"
-    chmod 644 "/var/www/sub/${token}"
-    SUB_URL="https://${DOMAIN}:${NGINX_PORT}/sub/${token}"
-    {
-      echo ""
-      echo "===== Subscription ====="
-      echo "$SUB_URL"
-    } >> "$OUT"
-  fi
+  $USE_DOMAIN || return 0
+  mkdir -p /var/www/sub
+  printf '%s\n' "${LINKS[@]}" | base64 -w0 > "/var/www/sub/${SUB_TOKEN}.txt"
+  SUB_URL="https://${DOMAIN}:${NGINX_PORT}/sub/${SUB_TOKEN}"
+  ok "Subscription file created."
 }
 
-summary(){
-  printf "\n${C2}========== Done ==========${C0}\n"
-  ok "Configs saved to: ${OUT}"
-  echo; cat "$OUT"; echo
-  if [ -n "$SUB_URL" ]; then
-    printf "${C2}Subscription link (add this in your client):${C0}\n" 
-    printf "  %s\n\n" "$SUB_URL"
-  fi
-  $USE_DOMAIN && warn "In Cloudflare: CDN domain orange-cloud, SSL/TLS set to Full"
-  [ "${HY2_CERT:-}" = "le" ] && warn "Subdomain ${HY2_DOMAIN} must be grey-cloud (DNS only)"
+# ---------- فایروال ----------
+open_firewall(){
+  command -v ufw >/dev/null 2>&1 || return 0
+  $USE_DOMAIN     && ufw allow "${NGINX_PORT}/tcp"   >/dev/null 2>&1 || true
+  $WANT_REALITY   && ufw allow "${REALITY_PORT}/tcp" >/dev/null 2>&1 || true
+  $WANT_HY2       && ufw allow "${HY2_PORT}/udp"     >/dev/null 2>&1 || true
+  [ "${HY2_CERT:-}" = "le" ] && ufw allow 80/tcp     >/dev/null 2>&1 || true
 }
 
-need_root
-install_base
-menu_mode
-collect_inputs
-install_cores
-gen_secrets
-setup_certs
-write_xray
-$WANT_HY2   && write_hysteria
-$USE_DOMAIN && write_nginx
-setup_fw
-start_all
-gen_links
-gen_subscription
-summary
+# ---------- راه‌اندازی سرویس‌ها ----------
+start_services(){
+  systemctl enable xray >/dev/null 2>&1 || true
+  systemctl restart xray
+  if $USE_DOMAIN; then
+    systemctl enable nginx >/dev/null 2>&1 || true
+    systemctl restart nginx
+  fi
+  if $WANT_HY2; then
+    systemctl enable hysteria-server >/dev/null 2>&1 || true
+    systemctl restart hysteria-server
+  fi
+  ok "Services started."
+}
+
+# ---------- خروجی نهایی ----------
+print_summary(){
+  printf "\n${C2}================ DONE ================${C0}\n" >"$TTY"
+  local l
+  for l in "${LINKS[@]}"; do
+    printf "%s\n\n" "$l" >"$TTY"
+  done
+  if $USE_DOMAIN; then
+    printf "${CG}Subscription URL:${C0}\n%s\n" "${SUB_URL}" >"$TTY"
+  fi
+  printf "${C2}=====================================${C0}\n" >"$TTY"
+}
+
+# ---------- جریان اصلی ----------
+main(){
+  menu_mode
+  collect_inputs
+  install_deps
+  gen_secrets
+  write_xray
+  write_nginx
+  write_hysteria
+  gen_links
+  gen_subscription
+  open_firewall
+  start_services
+  print_summary
+}
+
+main "$@"
