@@ -7,11 +7,19 @@ set -euo pipefail
 C0=$'\033[0m'; C1=$'\033[36m'; C2=$'\033[1;33m'; CR=$'\033[31m'; CG=$'\033[32m'
 TTY=/dev/tty
 
-ok(){   printf "${CG}[ok]${C0} %s\n" "$*" >"$TTY"; }
+ok(){   printf "${CG}[ok]${C0} %s\n"   "$*" >"$TTY"; }
 warn(){ printf "${C2}[warn]${C0} %s\n" "$*" >"$TTY"; }
-die(){  printf "${CR}[err]${C0} %s\n" "$*" >"$TTY"; exit 1; }
+die(){  printf "${CR}[err]${C0} %s\n"  "$*" >"$TTY"; exit 1; }
 
-# تابع پرسش: نام متغیر، متن، مقدار پیش‌فرض
+# سقف تلاش برای هر پرسش: ۱ بار اول + ۲ فرصت دیگر = ۳ بار
+MAX_TRIES=3
+
+# الگوهای اعتبارسنجی
+RE_DOMAIN='^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}$'
+RE_EMAIL='^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'
+RE_EXT='^PORT_IPS\[([0-9]+)\]="?([0-9A-Za-z.,:_-]+)"?$'
+
+# تابع پایه پرسش: نام متغیر، متن، مقدار پیش‌فرض
 ask(){
   local __var="$1" __prompt="$2" __default="${3:-}" __ans=""
   if [ -n "$__default" ]; then
@@ -23,10 +31,11 @@ ask(){
   [ -z "$__ans" ] && __ans="$__default"
   printf -v "$__var" '%s' "$__ans"
 }
-# پرسش بله/خیر با اعتبارسنجی؛ تا جواب معتبر نده دوباره می‌پرسد
+
+# پرسش بله/خیر؛ پاسخ نامعتبر را تا ۳ بار دوباره می‌پرسد سپس قطع می‌کند
 ask_yesno(){
-  local __var="$1" __prompt="$2" __default="${3:-}" __ans=""
-  while true; do
+  local __var="$1" __prompt="$2" __default="${3:-}" __ans="" __try=0
+  while [ "$__try" -lt "$MAX_TRIES" ]; do
     ask "$__var" "$__prompt (y/n)" "$__default"
     __ans="${!__var}"; __ans="${__ans,,}"
     case "$__ans" in
@@ -34,21 +43,55 @@ ask_yesno(){
       n|no)  printf -v "$__var" 'n'; return 0 ;;
       *) warn "Please answer y or n." ;;
     esac
+    __try=$((__try+1))
   done
+  die "Too many invalid attempts."
 }
 
-# پرسش انتخاب از بین گزینه‌های مجاز؛ ورودی نامعتبر را رد می‌کند
+# پرسش انتخاب از بین گزینه‌های مجاز؛ ۳ بار فرصت سپس قطع
 ask_choice(){
   local __var="$1" __prompt="$2" __default="$3"; shift 3
-  local __valid=("$@") __ans="" v
-  while true; do
+  local __valid=("$@") __ans="" v __try=0
+  while [ "$__try" -lt "$MAX_TRIES" ]; do
     ask "$__var" "$__prompt" "$__default"
     __ans="${!__var}"
     for v in "${__valid[@]}"; do
       [ "$__ans" = "$v" ] && return 0
     done
     warn "Invalid choice. Allowed: ${__valid[*]}"
+    __try=$((__try+1))
   done
+  die "Too many invalid attempts."
+}
+
+# پرسش متن با اعتبارسنجی regex؛ ۳ بار فرصت سپس قطع
+ask_valid(){
+  local __var="$1" __prompt="$2" __regex="$3" __default="${4:-}" __ans="" __try=0
+  while [ "$__try" -lt "$MAX_TRIES" ]; do
+    ask "$__var" "$__prompt" "$__default"
+    __ans="${!__var}"
+    if [ -n "$__ans" ] && [[ "$__ans" =~ $__regex ]]; then
+      return 0
+    fi
+    warn "Invalid format, please try again."
+    __try=$((__try+1))
+  done
+  die "Too many invalid attempts."
+}
+
+# پرسش پورت معتبر (۱ تا ۶۵۵۳۵)؛ ۳ بار فرصت سپس قطع
+ask_port(){
+  local __var="$1" __prompt="$2" __default="${3:-}" __ans="" __try=0
+  while [ "$__try" -lt "$MAX_TRIES" ]; do
+    ask "$__var" "$__prompt" "$__default"
+    __ans="${!__var}"
+    if [[ "$__ans" =~ ^[0-9]+$ ]] && [ "$__ans" -ge 1 ] && [ "$__ans" -le 65535 ]; then
+      return 0
+    fi
+    warn "Invalid port (must be 1-65535)."
+    __try=$((__try+1))
+  done
+  die "Too many invalid attempts."
 }
 
 # ---------- ثابت‌ها ----------
@@ -60,6 +103,7 @@ HY2_SNI="www.bing.com"
 WANT_WS=false; WANT_XHTTP=false; WANT_REALITY=false; WANT_HY2=false
 USE_DOMAIN=false
 declare -A PORT_IPS
+EXT_COUNT=0           # شمارنده مستقل برای جلوگیری از خطای unbound روی آرایه خالی
 LINKS=()
 
 # ---------- بررسی روت ----------
@@ -116,25 +160,27 @@ menu_mode(){
       ask_yesno a "Enable Hysteria2?"   "y"; [ "$a" = y ] && WANT_HY2=true
       ;;
   esac
+  # WS و XHTTP به دامنه/CDN نیاز دارند
   if $WANT_WS || $WANT_XHTTP; then USE_DOMAIN=true; fi
   $WANT_WS || $WANT_XHTTP || $WANT_REALITY || $WANT_HY2 || die "Nothing selected."
 }
-
-# ---------- جمع‌آوری اکسترنال پروکسی (تک‌خطی) ----------
+# ---------- جمع‌آوری اکسترنال پروکسی با فرمت PORT_IPS[port]="ip1,ip2,..." ----------
 collect_external_proxies(){
   EXT_COUNT=0
   printf "\n${C2}External (CDN clean) proxies${C0}\n" >"$TTY"
-  printf "  Paste lines in this exact format, then an empty line to finish:\n" >"$TTY"
+  printf "  Paste lines in this EXACT format, one per line:\n" >"$TTY"
   printf '    PORT_IPS[443]="104.19.184.210,104.27.53.171,104.21.127.190"\n' >"$TTY"
   printf '    PORT_IPS[2053]="104.19.184.210,104.27.53.171"\n' >"$TTY"
-  printf "  Press Enter on an empty line to skip.\n" >"$TTY"
+  printf '    PORT_IPS[2083]="104.21.127.190"\n' >"$TTY"
+  printf "  Finish with an empty line. Leave empty to skip.\n" >"$TTY"
   local line port ips
   while true; do
     printf "${C1}> ${C0}" >"$TTY"
     read -r line <"$TTY" || break
-    line="$(printf '%s' "$line" | tr -d ' ')"
+    # حذف فاصله‌ها برای تطبیق مطمئن‌تر
+    line="$(printf '%s' "$line" | tr -d '[:space:]')"
     [ -z "$line" ] && break
-    if [[ "$line" =~ ^PORT_IPS\[([0-9]+)\]=\"?([0-9a-zA-Z.,:_-]+)\"?$ ]]; then
+    if [[ "$line" =~ $RE_EXT ]]; then
       port="${BASH_REMATCH[1]}"; ips="${BASH_REMATCH[2]}"
       PORT_IPS["$port"]="$ips"
       EXT_COUNT=$((EXT_COUNT+1))
@@ -157,20 +203,19 @@ collect_inputs(){
   printf "\n${C2}=== Ports ===${C0}\n" >"$TTY"
   printf "  1) Use defaults (Nginx 2096, Hysteria2 36712, Reality 8443)\n" >"$TTY"
   printf "  2) Customize ports\n" >"$TTY"
-  ask PORT_MODE "Choice" "1"
+  ask_choice PORT_MODE "Choice" "1" 1 2
 
   if [ "$PORT_MODE" = "2" ]; then
     if $USE_DOMAIN; then
-      ask NGINX_PORT "Nginx port (CDN origin: 443/2053/2083/2087/2096/8443)" "2096"
+      ask_port NGINX_PORT "Nginx port (CDN origin: 443/2053/2083/2087/2096/8443)" "2096"
     fi
-    if $WANT_HY2;     then ask HY2_PORT "Hysteria2 port (UDP)" "36712"; fi
-    if $WANT_REALITY; then ask REALITY_PORT "Reality port (direct TCP)" "8443"; fi
+    if $WANT_HY2;     then ask_port HY2_PORT "Hysteria2 port (UDP)" "36712"; fi
+    if $WANT_REALITY; then ask_port REALITY_PORT "Reality port (direct TCP)" "8443"; fi
   fi
 
-  # دامنه فقط برای WS/XHTTP الزامی است
+  # دامنه فقط برای WS/XHTTP الزامی است؛ فرمت نامعتبر = تکرار، نه قطع آنی
   if $USE_DOMAIN; then
-    ask DOMAIN "Domain for WS/XHTTP (Cloudflare orange-cloud)"
-    [ -n "${DOMAIN:-}" ] || die "Domain is required for WS/XHTTP."
+    ask_valid DOMAIN "Domain for WS/XHTTP (Cloudflare orange-cloud)" "$RE_DOMAIN"
   fi
 
   # گواهی Hysteria2
@@ -179,9 +224,8 @@ collect_inputs(){
     ask_choice HY2_CERT_CH "Choice" "1" 1 2
     if [ "$HY2_CERT_CH" = "2" ]; then
       HY2_CERT="le"
-      ask HY2_DOMAIN "Hysteria2 subdomain (grey-cloud / DNS only)"
-      ask LE_EMAIL   "Email for Let's Encrypt"
-      [ -n "${HY2_DOMAIN:-}" ] || die "Hysteria2 domain required for Let's Encrypt."
+      ask_valid HY2_DOMAIN "Hysteria2 subdomain (grey-cloud / DNS only)" "$RE_DOMAIN"
+      ask_valid LE_EMAIL   "Email for Let's Encrypt" "$RE_EMAIL"
     else
       HY2_CERT="self"
     fi
@@ -189,17 +233,18 @@ collect_inputs(){
 
   # SNI فقط برای Reality
   if $WANT_REALITY; then
-    ask SNI "SNI/destination for Reality (a real website)" "www.microsoft.com"
+    ask_valid SNI "SNI/destination for Reality (a real website)" "$RE_DOMAIN" "www.microsoft.com"
   fi
 
-  # اکسترنال پروکسی‌ها با سینتکس تک‌خطی
-    if $WANT_WS || $WANT_XHTTP; then
+  # اکسترنال پروکسی‌ها؛ خالی‌گذاشتن قطع نمی‌کند بلکه تأیید می‌گیرد
+  if $WANT_WS || $WANT_XHTTP; then
     while true; do
       collect_external_proxies
       if [ "${EXT_COUNT:-0}" -gt 0 ]; then break; fi
       ask_yesno SURE "No proxies entered. Connect directly to your own domain (${DOMAIN}) on port ${NGINX_PORT}?" "y"
       if [ "$SURE" = "y" ]; then
         PORT_IPS["$NGINX_PORT"]="$DOMAIN"
+        EXT_COUNT=1
         warn "Using domain ${DOMAIN} directly on port ${NGINX_PORT}."
         break
       fi
@@ -209,7 +254,6 @@ collect_inputs(){
 
   ask CONFIG_NAME "A name for your configs" "MyVPN"
 }
-
 # ---------- تولید کلید/شناسه‌ها ----------
 gen_secrets(){
   UUID="$(xray uuid)"
@@ -227,6 +271,7 @@ gen_secrets(){
   fi
   ok "Secrets generated."
 }
+
 # ---------- ساخت کانفیگ Xray ----------
 write_xray(){
   local inbounds=() joined
@@ -297,7 +342,6 @@ EOF
   xray -test -config /usr/local/etc/xray/config.json >"$TTY" 2>&1 || die "Xray config test failed."
   ok "Xray config written."
 }
-
 # ---------- ساخت کانفیگ Nginx ----------
 write_nginx(){
   $USE_DOMAIN || return 0
@@ -310,10 +354,7 @@ write_nginx(){
       -days 3650 -subj "/CN=${DOMAIN}" >/dev/null 2>&1
   fi
 
-  # صفحه پوششی ساده
   echo "<html><body><h1>It works.</h1></body></html>" > /var/www/html/index.html
-
-  # حذف سایت پیش‌فرض دبیان در صورت وجود
   rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 
   local ws_block="" xh_block=""
@@ -417,11 +458,12 @@ EOF
 
 # ---------- تولید لینک‌ها ----------
 gen_links(){
-  local enc_ws enc_xh port ips ip
-  enc_ws="$(printf '%s' "${WS_PATH:-}"   | sed 's:/:%2F:g')"
+  local enc_ws enc_xh port ip
+  enc_ws="$(printf '%s' "${WS_PATH:-}"    | sed 's:/:%2F:g')"
   enc_xh="$(printf '%s' "${XHTTP_PATH:-}" | sed 's:/:%2F:g')"
 
-  if { $WANT_WS || $WANT_XHTTP; } && [ "${#PORT_IPS[@]}" -gt 0 ]; then
+  # PORT_IPS فقط وقتی WS/XHTTP فعال باشد پر شده، پس آرایه خالی نیست
+  if $WANT_WS || $WANT_XHTTP; then
     for port in "${!PORT_IPS[@]}"; do
       IFS=',' read -ra _ips <<< "${PORT_IPS[$port]}"
       for ip in "${_ips[@]}"; do
