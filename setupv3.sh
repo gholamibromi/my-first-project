@@ -32,7 +32,7 @@ welcome_screen() {
   printf "\n" >"$TTY"
   banner "  ╔══════════════════════════════════════════════════════════════════════════════╗"
   banner "  ║                        VPN Multi-Protocol Installer                          ║"
-  banner "  ║                              Author: CR-VPN                                  ║"
+  banner "  ║                              Author: CRt-VPN                                 ║"
   banner "  ║                  Supported: VLESS, Hysteria2, WARP, Nginx                    ║"
   banner "  ╚══════════════════════════════════════════════════════════════════════════════╝"
   printf "\n" >"$TTY"
@@ -64,6 +64,7 @@ LINKS=()
 DOMAIN=""
 REALITY_PORT="8443"
 SNI="www.microsoft.com"
+REALITY_SNIS=""
 HY2_PORT="36712"
 HY2_CERT="self"
 HY2_DOMAIN=""
@@ -75,6 +76,13 @@ SERVER_IP=""
 
 UUID=""; WS_PATH=""; XHTTP_PATH=""; HY2_PASS=""
 REALITY_PRIV=""; REALITY_PUB=""; REALITY_SID=""
+
+TLS_VER="1.2"
+ALPN="h2,http/1.1"
+BLOCK_QUIC=false
+IP_PREF="auto"
+MUX=false
+FRAGMENT=false
 
 [ "$(id -u)" = 0 ] || die "Please run as root."
 
@@ -99,6 +107,7 @@ NGINX_PORTS="${NGINX_PORTS[*]:-}"
 FP="${FP:-chrome}"
 REALITY_PORT="${REALITY_PORT:-8443}"
 SNI="${SNI:-www.microsoft.com}"
+REALITY_SNIS="${REALITY_SNIS:-}"
 HY2_PORT="${HY2_PORT:-36712}"
 HY2_CERT="${HY2_CERT:-self}"
 HY2_DOMAIN="${HY2_DOMAIN:-}"
@@ -114,6 +123,12 @@ REALITY_PRIV="${REALITY_PRIV:-}"
 REALITY_PUB="${REALITY_PUB:-}"
 REALITY_SID="${REALITY_SID:-}"
 SERVER_IP="${SERVER_IP:-}"
+TLS_VER="${TLS_VER:-1.2}"
+ALPN="${ALPN:-h2,http/1.1}"
+BLOCK_QUIC=$BLOCK_QUIC
+IP_PREF="${IP_PREF:-auto}"
+MUX=$MUX
+FRAGMENT=$FRAGMENT
 EOF
   local p
   for p in "${NGINX_PORTS[@]:-}"; do
@@ -302,7 +317,7 @@ new_install_menu(){
   banner "  ╚══════════════════════════════════════════╝"
   printf "  ${C2}1)${C0} Fast Mode         ${C3}(Auto-config Reality & Hysteria2)${C0}\n" >"$TTY"
   printf "  ${C2}2)${C0} Simple Manual     ${C3}(Step-by-step wizard)${C0}\n" >"$TTY"
-  printf "  ${C2}3)${C0} Advanced Manual   ${C3}(Dynamic menu for all settings)${C0}\n" >"$TTY"
+  printf "  ${C2}3)${C0} Advanced Panel    ${C3}(Full control over all settings)${C0}\n" >"$TTY"
   printf "  ${C2}0)${C0} Cancel\n\n" >"$TTY"
   
   local mode=""
@@ -343,42 +358,29 @@ mode_simple(){
   execute_build
 }
 
+# ── Advanced Menus ───────────────────────────────────────────────
 mode_advanced(){
   while true; do
     clear_screen
     banner "  ╔══════════════════════════════════════════╗"
-    banner "  ║            Advanced Settings             ║"
+    banner "  ║            Advanced Panel                ║"
     banner "  ╚══════════════════════════════════════════╝"
-    printf "  ${C3}Protocols:${C0}\n" >"$TTY"
-    printf "  ${C2}1)${C0} VLESS-WS      : ${CG}%s${C0}\n" "$($WANT_WS && echo ON || echo OFF)" >"$TTY"
-    printf "  ${C2}2)${C0} VLESS-XHTTP   : ${CG}%s${C0}\n" "$($WANT_XHTTP && echo ON || echo OFF)" >"$TTY"
-    printf "  ${C2}3)${C0} VLESS-Reality : ${CG}%s${C0}\n" "$($WANT_REALITY && echo ON || echo OFF)" >"$TTY"
-    printf "  ${C2}4)${C0} Hysteria2     : ${CG}%s${C0}\n" "$($WANT_HY2 && echo ON || echo OFF)" >"$TTY"
-    
-    printf "\n  ${C3}Features:${C0}\n" >"$TTY"
-    printf "  ${C2}5)${C0} WARP Outbound : ${CG}%s${C0}\n" "$($WANT_WARP && echo ON || echo OFF)" >"$TTY"
-    
-    printf "\n  ${C3}General Info:${C0}\n" >"$TTY"
-    printf "  ${C2}6)${C0} Domain        : ${CC}%s${C0}\n" "${DOMAIN:-[Not Set]}" >"$TTY"
-    printf "  ${C2}7)${C0} Nginx Ports   : ${CC}%s${C0}\n" "${NGINX_PORTS[*]:-[Not Set]}" >"$TTY"
-    printf "  ${C2}8)${C0} Config Name   : ${CC}%s${C0}\n" "${CONFIG_NAME:-}" >"$TTY"
-    printf "  ${C2}9)${C0} Sub Path      : ${CC}%s${C0}\n" "${SUB_PATH_IN:-}" >"$TTY"
-    
+    printf "  ${C2}1)${C0} Core Protocols      ${C3}(WS, XHTTP, Reality, HY2, WARP)${C0}\n" >"$TTY"
+    printf "  ${C2}2)${C0} Network & Domain    ${C3}(Domain, Ports, Sub Path)${C0}\n" >"$TTY"
+    printf "  ${C2}3)${C0} Identity & Secrets  ${C3}(UUID, Keys, Password)${C0}\n" >"$TTY"
+    printf "  ${C2}4)${C0} TLS & Reality Tweaks${C3}(SNI, ALPN, Mux, Fragment)${C0}\n" >"$TTY"
+    printf "  ${C2}5)${C0} Routing & Rules     ${C3}(Block QUIC, IPv4/IPv6)${C0}\n" >"$TTY"
     printf "\n  ${CG}0) Start Build${C0}\n" >"$TTY"
-    printf "  ${CR}99) Cancel${C0}\n" >"$TTY"
+    printf "  ${CR}99) Cancel${C0}\n\n" >"$TTY"
     
     local opt=""
     ask opt "Select an option" ""
     case "${opt:-}" in
-      1) $WANT_WS && WANT_WS=false || WANT_WS=true ;;
-      2) $WANT_XHTTP && WANT_XHTTP=false || WANT_XHTTP=true ;;
-      3) $WANT_REALITY && WANT_REALITY=false || WANT_REALITY=true ;;
-      4) $WANT_HY2 && WANT_HY2=false || WANT_HY2=true ;;
-      5) $WANT_WARP && WANT_WARP=false || WANT_WARP=true ;;
-      6) ask_valid DOMAIN "Enter Domain" "$RE_DOMAIN" "${DOMAIN:-}" ;;
-      7) collect_nginx_ports ;;
-      8) ask CONFIG_NAME "Enter Config Name" "${CONFIG_NAME:-}"; CONFIG_NAME="${CONFIG_NAME// /_}" ;;
-      9) ask_valid SUB_PATH_IN "Enter Subscription Path" "$RE_SUBPATH" "${SUB_PATH_IN:-}" ;;
+      1) adv_core ;;
+      2) adv_network ;;
+      3) adv_identity ;;
+      4) adv_tls ;;
+      5) adv_routing ;;
       0) 
         if ! $WANT_WS && ! $WANT_XHTTP && ! $WANT_REALITY && ! $WANT_HY2; then
           warn "At least one protocol must be selected!"; press_enter; continue
@@ -389,11 +391,7 @@ mode_advanced(){
         if $WANT_WS || $WANT_XHTTP; then USE_DOMAIN=true; else USE_DOMAIN=false; fi
         [ "${#NGINX_PORTS[@]}" -eq 0 ] && NGINX_PORTS=(2096)
         
-        if [ -n "${SUB_PATH_IN:-}" ]; then
-          SUB_TOKEN="$SUB_PATH_IN"
-        else
-          SUB_TOKEN="$(openssl rand -hex 16)"
-        fi
+        if [ -n "${SUB_PATH_IN:-}" ]; then SUB_TOKEN="$SUB_PATH_IN"; else SUB_TOKEN="$(openssl rand -hex 16)"; fi
         execute_build
         return
         ;;
@@ -403,16 +401,146 @@ mode_advanced(){
   done
 }
 
+adv_core(){
+  while true; do
+    clear_screen
+    banner "  ╔══════════════════════════════════════════╗"
+    banner "  ║            Core Protocols                ║"
+    banner "  ╚══════════════════════════════════════════╝"
+    printf "  ${C2}1)${C0} VLESS-WS      : ${CG}%s${C0}\n" "$($WANT_WS && echo ON || echo OFF)" >"$TTY"
+    printf "  ${C2}2)${C0} VLESS-XHTTP   : ${CG}%s${C0}\n" "$($WANT_XHTTP && echo ON || echo OFF)" >"$TTY"
+    printf "  ${C2}3)${C0} VLESS-Reality : ${CG}%s${C0}\n" "$($WANT_REALITY && echo ON || echo OFF)" >"$TTY"
+    printf "  ${C2}4)${C0} Hysteria2     : ${CG}%s${C0}\n" "$($WANT_HY2 && echo ON || echo OFF)" >"$TTY"
+    printf "  ${C2}5)${C0} WARP Outbound : ${CG}%s${C0}\n" "$($WANT_WARP && echo ON || echo OFF)" >"$TTY"
+    printf "\n  ${CR}0) Back${C0}\n\n" >"$TTY"
+    local opt=""
+    ask opt "Select an option" ""
+    case "${opt:-}" in
+      1) $WANT_WS && WANT_WS=false || WANT_WS=true ;;
+      2) $WANT_XHTTP && WANT_XHTTP=false || WANT_XHTTP=true ;;
+      3) $WANT_REALITY && WANT_REALITY=false || WANT_REALITY=true ;;
+      4) $WANT_HY2 && WANT_HY2=false || WANT_HY2=true ;;
+      5) $WANT_WARP && WANT_WARP=false || WANT_WARP=true ;;
+      0) return ;;
+    esac
+  done
+}
+
+adv_network(){
+  while true; do
+    clear_screen
+    banner "  ╔══════════════════════════════════════════╗"
+    banner "  ║            Network & Domain              ║"
+    banner "  ╚══════════════════════════════════════════╝"
+    printf "  ${C2}1)${C0} Domain        : ${CC}%s${C0}\n" "${DOMAIN:-[Not Set]}" >"$TTY"
+    printf "  ${C2}2)${C0} Nginx Ports   : ${CC}%s${C0}\n" "${NGINX_PORTS[*]:-[Not Set]}" >"$TTY"
+    printf "  ${C2}3)${C0} Sub Path      : ${CC}%s${C0}\n" "${SUB_PATH_IN:-}" >"$TTY"
+    printf "  ${C2}4)${C0} Config Name   : ${CC}%s${C0}\n" "${CONFIG_NAME:-}" >"$TTY"
+    printf "  ${C2}5)${C0} Fingerprint   : ${CC}%s${C0}\n" "${FP:-}" >"$TTY"
+    printf "  ${C2}6)${C0} Reality Port  : ${CC}%s${C0}\n" "${REALITY_PORT:-}" >"$TTY"
+    printf "  ${C2}7)${C0} HY2 Port      : ${CC}%s${C0}\n" "${HY2_PORT:-}" >"$TTY"
+    printf "  ${C2}8)${C0} External Proxy IPs (For Sub)\n" >"$TTY"
+    printf "\n  ${CR}0) Back${C0}\n\n" >"$TTY"
+    local opt=""
+    ask opt "Select an option" ""
+    case "${opt:-}" in
+      1) ask_valid DOMAIN "Enter Domain" "$RE_DOMAIN" "${DOMAIN:-}" ;;
+      2) collect_nginx_ports ;;
+      3) ask_valid SUB_PATH_IN "Enter Subscription Path" "$RE_SUBPATH" "${SUB_PATH_IN:-}" ;;
+      4) ask CONFIG_NAME "Enter Config Name" "${CONFIG_NAME:-}"; CONFIG_NAME="${CONFIG_NAME// /_}" ;;
+      5) menu_fingerprint ;;
+      6) ask_port REALITY_PORT "Reality Port" "${REALITY_PORT:-}" ;;
+      7) ask_port HY2_PORT "HY2 Port" "${HY2_PORT:-}" ;;
+      8) collect_external_proxies ;;
+      0) return ;;
+    esac
+  done
+}
+
+adv_identity(){
+  while true; do
+    clear_screen
+    banner "  ╔══════════════════════════════════════════╗"
+    banner "  ║            Identity & Secrets            ║"
+    banner "  ╚══════════════════════════════════════════╝"
+    printf "  ${C3}Note: Set these manually to migrate servers without updating clients!${C0}\n" >"$TTY"
+    printf "  ${C2}1)${C0} UUID          : ${CC}%s${C0}\n" "${UUID:-[Auto-generated]}" >"$TTY"
+    printf "  ${C2}2)${C0} Reality Priv  : ${CC}%s${C0}\n" "${REALITY_PRIV:-[Auto-generated]}" >"$TTY"
+    printf "  ${C2}3)${C0} Reality ShortId: ${CC}%s${C0}\n" "${REALITY_SID:-[Auto-generated]}" >"$TTY"
+    printf "  ${C2}4)${C0} HY2 Password  : ${CC}%s${C0}\n" "${HY2_PASS:-[Auto-generated]}" >"$TTY"
+    printf "  ${C2}5)${C0} WS Path       : ${CC}%s${C0}\n" "${WS_PATH:-[Auto-generated]}" >"$TTY"
+    printf "  ${C2}6)${C0} XHTTP Path    : ${CC}%s${C0}\n" "${XHTTP_PATH:-[Auto-generated]}" >"$TTY"
+    printf "\n  ${CR}0) Back${C0}\n\n" >"$TTY"
+    local opt=""
+    ask opt "Select an option" ""
+    case "${opt:-}" in
+      1) ask UUID "Enter Custom UUID" "${UUID:-}" ;;
+      2) ask REALITY_PRIV "Enter Reality Private Key" "${REALITY_PRIV:-}" ;;
+      3) ask REALITY_SID "Enter Reality ShortId (e.g. 16 chars hex)" "${REALITY_SID:-}" ;;
+      4) ask HY2_PASS "Enter HY2 Password" "${HY2_PASS:-}" ;;
+      5) ask WS_PATH "Enter WS Path (must start with /)" "${WS_PATH:-}" ;;
+      6) ask XHTTP_PATH "Enter XHTTP Path (must start with /)" "${XHTTP_PATH:-}" ;;
+      0) return ;;
+    esac
+  done
+}
+
+adv_tls(){
+  while true; do
+    clear_screen
+    banner "  ╔══════════════════════════════════════════╗"
+    banner "  ║          TLS & Reality Tweaks            ║"
+    banner "  ╚══════════════════════════════════════════╝"
+    printf "  ${C2}1)${C0} Reality Primary SNI : ${CC}%s${C0}\n" "${SNI:-[Not Set]}" >"$TTY"
+    printf "  ${C2}2)${C0} Reality Extra SNIs  : ${CC}%s${C0}\n" "${REALITY_SNIS:-[None]}" >"$TTY"
+    printf "  ${C2}3)${C0} Nginx TLS Version   : ${CC}%s${C0}\n" "${TLS_VER:-1.2}" >"$TTY"
+    printf "  ${C2}4)${C0} ALPN Override       : ${CC}%s${C0}\n" "${ALPN:-}" >"$TTY"
+    printf "  ${C2}5)${C0} Mux (Clientside)    : ${CG}%s${C0}\n" "$($MUX && echo ON || echo OFF)" >"$TTY"
+    printf "  ${C2}6)${C0} Fragment (Clients)  : ${CG}%s${C0}\n" "$($FRAGMENT && echo ON || echo OFF)" >"$TTY"
+    printf "\n  ${CR}0) Back${C0}\n\n" >"$TTY"
+    local opt=""
+    ask opt "Select an option" ""
+    case "${opt:-}" in
+      1) ask_valid SNI "Primary SNI" "$RE_DOMAIN" "${SNI:-}" ;;
+      2) ask REALITY_SNIS "Extra SNIs (comma-separated, e.g. www.yahoo.com,apple.com)" "${REALITY_SNIS:-}" ;;
+      3) ask_choice TLS_VER "TLS Version (1.2 or 1.3)" "1.2" "1.2" "1.3" ;;
+      4) ask_choice ALPN "ALPN" "h2,http/1.1" "h2,http/1.1" "h2" "http/1.1" ;;
+      5) $MUX && MUX=false || MUX=true ;;
+      6) $FRAGMENT && FRAGMENT=false || FRAGMENT=true ;;
+      0) return ;;
+    esac
+  done
+}
+
+adv_routing(){
+  while true; do
+    clear_screen
+    banner "  ╔══════════════════════════════════════════╗"
+    banner "  ║            Routing & Rules               ║"
+    banner "  ╚══════════════════════════════════════════╝"
+    printf "  ${C3}Note: Iranian domains/IPs are always blocked to prevent IP leak to GFW.${C0}\n" >"$TTY"
+    printf "  ${C2}1)${C0} Block QUIC Outbound (Drops UDP/443 to force TCP) : ${CG}%s${C0}\n" "$($BLOCK_QUIC && echo ON || echo OFF)" >"$TTY"
+    printf "  ${C2}2)${C0} IP Preference (auto / ipv4 / ipv6)               : ${CC}%s${C0}\n" "${IP_PREF:-auto}" >"$TTY"
+    printf "\n  ${CR}0) Back${C0}\n\n" >"$TTY"
+    local opt=""
+    ask opt "Select an option" ""
+    case "${opt:-}" in
+      1) $BLOCK_QUIC && BLOCK_QUIC=false || BLOCK_QUIC=true ;;
+      2) ask_choice IP_PREF "IP Preference" "auto" "auto" "ipv4" "ipv6" ;;
+      0) return ;;
+    esac
+  done
+}
+
+
 # ── Base Functions from Original Script ────────────────────────
 tune_kernel(){
-  # افزایش بافر UDP برای QUIC/Hysteria2 — رفع کندی و بخشی از مشکل -1 ping
   cat > /etc/sysctl.d/99-hysteria.conf <<'EOF'
 net.core.rmem_max=16777216
 net.core.wmem_max=16777216
 net.core.rmem_default=1048576
 net.core.wmem_default=1048576
 EOF
-  # فعال‌سازی BBR در صورت پشتیبانی کرنل
   if modprobe tcp_bbr 2>/dev/null && \
      sysctl net.ipv4.tcp_available_congestion_control 2>/dev/null | grep -q bbr; then
     cat > /etc/sysctl.d/99-bbr.conf <<'EOF'
@@ -674,27 +802,28 @@ collect_inputs(){
 }
 
 gen_secrets(){
-  UUID="$(xray uuid)"
-  WS_PATH="/$(openssl rand -hex 4)-ws"
-  XHTTP_PATH="/$(openssl rand -hex 4)-xh"
-  SUB_TOKEN="${SUB_TOKEN:-$(openssl rand -hex 16)}"
-  HY2_PASS="$(openssl rand -hex 12)"
+  if [ -z "${UUID:-}" ]; then UUID="$(xray uuid)"; fi
+  if [ -z "${WS_PATH:-}" ]; then WS_PATH="/$(openssl rand -hex 4)-ws"; fi
+  if [ -z "${XHTTP_PATH:-}" ]; then XHTTP_PATH="/$(openssl rand -hex 4)-xh"; fi
+  if [ -z "${SUB_TOKEN:-}" ]; then SUB_TOKEN="$(openssl rand -hex 16)"; fi
+  if [ -z "${HY2_PASS:-}" ]; then HY2_PASS="$(openssl rand -hex 12)"; fi
 
   if $WANT_REALITY; then
-    local keys
-    keys="$(xray x25519)"
-    REALITY_PRIV="$(echo "$keys" | grep -i 'private' | awk '{print $NF}')"
-    REALITY_PUB="$(echo "$keys"  | grep -i 'public'  | awk '{print $NF}')"
-    REALITY_SID="$(openssl rand -hex 8)"
+    if [ -z "${REALITY_PRIV:-}" ] || [ -z "${REALITY_PUB:-}" ]; then
+      local keys
+      keys="$(xray x25519)"
+      REALITY_PRIV="$(echo "$keys" | grep -i 'private' | awk '{print $NF}')"
+      REALITY_PUB="$(echo "$keys"  | grep -i 'public'  | awk '{print $NF}')"
+    fi
+    if [ -z "${REALITY_SID:-}" ]; then REALITY_SID="$(openssl rand -hex 8)"; fi
   fi
-  ok "Secrets generated."
+  ok "Secrets generated/loaded."
 }
 
 write_xray(){
   local inbounds=() joined
   mkdir -p /usr/local/etc/xray
 
-  # بلوک Sniffing مشترک همه inboundها
   local SNIFF='"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":false}'
 
   if $WANT_WS; then
@@ -722,13 +851,22 @@ EOF
   fi
 
   if $WANT_REALITY; then
+    local snis_json="\"${SNI}\""
+    if [ -n "${REALITY_SNIS:-}" ]; then
+      local IFS=','
+      for s in ${REALITY_SNIS}; do
+        s="$(echo "$s" | tr -d ' ')"
+        [ -n "$s" ] && snis_json+=",\"$s\""
+      done
+    fi
+
     inbounds+=("$(cat <<EOF
 {
   "listen":"0.0.0.0","port":${REALITY_PORT},"protocol":"vless","tag":"in-reality",
   "settings":{"clients":[{"id":"${UUID}","flow":"xtls-rprx-vision"}],"decryption":"none"},
   "streamSettings":{"network":"tcp","security":"reality",
     "realitySettings":{"show":false,"dest":"${SNI}:443","xver":0,
-      "serverNames":["${SNI}"],"privateKey":"${REALITY_PRIV}","shortIds":["${REALITY_SID}"]}},
+      "serverNames":[${snis_json}],"privateKey":"${REALITY_PRIV}","shortIds":["${REALITY_SID}"]}},
   ${SNIFF}
 }
 EOF
@@ -738,25 +876,35 @@ EOF
   joined="$(IFS=,; echo "${inbounds[*]}")"
 
   # ---------- outbounds ----------
-  local OUTBOUNDS WARP_RULE=""
+  local OUTBOUNDS WARP_RULE="" BLOCK_QUIC_RULE=""
+  
+  local ip_strat="AsIs"
+  if [ "${IP_PREF:-}" = "ipv4" ]; then ip_strat="UseIPv4"; fi
+  if [ "${IP_PREF:-}" = "ipv6" ]; then ip_strat="UseIPv6"; fi
+
   if $WANT_WARP; then
-    OUTBOUNDS='[{"protocol":"freedom","tag":"direct"},{"protocol":"blackhole","tag":"block"},{"protocol":"socks","tag":"warp","settings":{"servers":[{"address":"127.0.0.1","port":'"${WARP_PORT}"'}]}}]'
+    OUTBOUNDS='[{"protocol":"freedom","tag":"direct","settings":{"domainStrategy":"'"${ip_strat}"'"}},{"protocol":"blackhole","tag":"block"},{"protocol":"socks","tag":"warp","settings":{"servers":[{"address":"127.0.0.1","port":'"${WARP_PORT}"'}]}}]'
     WARP_RULE='{"type":"field","outboundTag":"warp","domain":["geosite:google","geosite:openai","geosite:netflix","geosite:spotify","domain:claude.ai","domain:anthropic.com","domain:chatgpt.com"]},'
   else
-    OUTBOUNDS='[{"protocol":"freedom","tag":"direct"},{"protocol":"blackhole","tag":"block"}]'
+    OUTBOUNDS='[{"protocol":"freedom","tag":"direct","settings":{"domainStrategy":"'"${ip_strat}"'"}},{"protocol":"blackhole","tag":"block"}]'
   fi
 
-  # ---------- routing: block torrent + block private + direct داخلی ----------
+  if $BLOCK_QUIC; then
+    BLOCK_QUIC_RULE='{"type":"field","network":"udp","port":443,"outboundTag":"block"},'
+  fi
+
+  # ---------- routing: block torrent + block private + block داخلی ----------
   local ROUTING
   ROUTING=$(cat <<EOF
 {
   "domainStrategy":"IPIfNonMatch",
   "rules":[
     ${WARP_RULE}
+    ${BLOCK_QUIC_RULE}
     {"type":"field","protocol":["bittorrent"],"outboundTag":"block"},
     {"type":"field","outboundTag":"block","ip":["geoip:private"]},
-    {"type":"field","outboundTag":"direct","domain":["geosite:category-ir"]},
-    {"type":"field","outboundTag":"direct","ip":["geoip:ir"]}
+    {"type":"field","outboundTag":"block","domain":["geosite:category-ir"]},
+    {"type":"field","outboundTag":"block","ip":["geoip:ir"]}
   ]
 }
 EOF
@@ -772,7 +920,7 @@ EOF
 EOF
 
   xray -test -config /usr/local/etc/xray/config.json >"$TTY" 2>&1 || die "Xray config test failed."
-  ok "Xray config written (sniffing + routing$([ "$WANT_WARP" = true ] && echo ' + WARP'))."
+  ok "Xray config written."
 }
 
 write_nginx(){
@@ -790,8 +938,8 @@ write_nginx(){
 
   local listens="" p=""
   for p in "${NGINX_PORTS[@]:-}"; do
-    listens+="    listen ${p} ssl;"$'\n'
-    listens+="    listen [::]:${p} ssl;"$'\n'
+    listens+="    listen ${p} ssl http2;"$'\n'
+    listens+="    listen [::]:${p} ssl http2;"$'\n'
   done
 
   local ws_block="" xh_block=""
@@ -828,13 +976,16 @@ EOF
 )
   fi
 
+  local tls_str="TLSv1.2 TLSv1.3"
+  [ "${TLS_VER:-1.2}" = "1.3" ] && tls_str="TLSv1.3"
+
   cat > /etc/nginx/conf.d/xray.conf <<EOF
 server {
 ${listens}    server_name ${DOMAIN};
 
     ssl_certificate     /etc/ssl/xray/cert.pem;
     ssl_certificate_key /etc/ssl/xray/key.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_protocols ${tls_str};
 
 ${ws_block}
 ${xh_block}
@@ -938,7 +1089,6 @@ masquerade:
 ${warp_block}
 EOF
 
-  # سرویس رسمی با کاربر غیرروت اجرا می‌شود و privkey لتس‌انکریپت را نمی‌خواند؛ روت اجرا می‌کنیم
   mkdir -p /etc/systemd/system/hysteria-server.service.d
   cat > /etc/systemd/system/hysteria-server.service.d/override.conf <<EOF
 [Service]
@@ -948,7 +1098,6 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
 EOF
   systemctl daemon-reload
 
-  # تست صحت کانفیگ قبل از استارت
   hysteria server -c /etc/hysteria/config.yaml --disable-update-check check >"$TTY" 2>&1 \
     || warn "Hysteria2 config check reported issues (continuing)."
   ok "Hysteria2 config written (QUIC tuned$([ "$WANT_WARP" = true ] && echo ' + WARP'))."
@@ -958,19 +1107,23 @@ gen_links(){
   local port="" ip=""
   LINKS=()
   SERVER_IP="$(curl -fsSL https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')"
-  # چند آدرس در ساب: هر IP در هر پورت یک لینک مستقل می‌سازد (افزونگی در برابر فیلتر)
+  
+  local xtra=""
+  $MUX && xtra+="&mux=concurrency:8"
+  $FRAGMENT && xtra+="&fragment=10-20,10-20,tlshello"
+  
   if $WANT_WS || $WANT_XHTTP; then
     for port in "${!PORT_IPS[@]}"; do
       IFS=',' read -ra _ips <<< "${PORT_IPS[$port]}"
       for ip in "${_ips[@]:-}"; do
         [ -z "${ip:-}" ] && continue
-        $WANT_WS && LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=${FP}&type=ws&host=${DOMAIN}&path=${WS_PATH}#${CONFIG_NAME}-WS-${ip}-${port}")
-        $WANT_XHTTP && LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=${FP}&type=xhttp&host=${DOMAIN}&path=${XHTTP_PATH}&mode=auto#${CONFIG_NAME}-XHTTP-${ip}-${port}")
+        $WANT_WS && LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=${FP}&type=ws&host=${DOMAIN}&path=${WS_PATH}&alpn=${ALPN}${xtra}#${CONFIG_NAME}-WS-${ip}-${port}")
+        $WANT_XHTTP && LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=${FP}&type=xhttp&host=${DOMAIN}&path=${XHTTP_PATH}&mode=auto&alpn=${ALPN}${xtra}#${CONFIG_NAME}-XHTTP-${ip}-${port}")
       done
     done
   fi
 
-  $WANT_REALITY && LINKS+=("vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=none&security=reality&sni=${SNI}&fp=${FP}&pbk=${REALITY_PUB}&sid=${REALITY_SID}&flow=xtls-rprx-vision&type=tcp#${CONFIG_NAME}-Reality")
+  $WANT_REALITY && LINKS+=("vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=none&security=reality&sni=${SNI}&fp=${FP}&pbk=${REALITY_PUB}&sid=${REALITY_SID}&flow=xtls-rprx-vision&type=tcp${xtra}#${CONFIG_NAME}-Reality")
 
   if $WANT_HY2; then
     local h_host="" h_sni="" h_ins=""
@@ -1054,7 +1207,7 @@ execute_build(){
   banner "  ║           Building Configurations        ║"
   banner "  ╚══════════════════════════════════════════╝"
   install_deps
-  if [ -z "${UUID:-}" ]; then gen_secrets; fi
+  gen_secrets
   write_xray
   write_nginx
   write_hysteria
@@ -1111,6 +1264,7 @@ restore_menu(){
   if [ "$sel" -ge 1 ] && [ "$sel" -le "${#backups[@]}" ]; then
     local chosen="${backups[$((sel-1))]}"
     info "Restoring from $chosen ..."
+    killall -9 xray hysteria hysteria-server 2>/dev/null || true
     systemctl stop xray hysteria-server nginx 2>/dev/null || true
     
     cp -a "$chosen/config.json" /usr/local/etc/xray/ 2>/dev/null || true
@@ -1159,6 +1313,7 @@ full_removal(){
   ask_yesno ans "Are you absolutely sure?" "n"
   if [ "${ans:-}" = "y" ]; then
     info "Stopping services..."
+    killall -9 xray hysteria hysteria-server 2>/dev/null || true
     systemctl stop xray hysteria-server hysteria warp-svc nginx 2>/dev/null || true
     systemctl disable xray hysteria-server hysteria warp-svc nginx 2>/dev/null || true
     
