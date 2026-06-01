@@ -49,8 +49,8 @@ echo "${C2}[*] Generating Backend Logic...${C0}"
 cat << 'EOF' > /opt/cr-vpn/app.py
 import os
 import subprocess
-import json
-from flask import Flask, request, render_template, redirect, url_for, session, jsonify
+import os, json, subprocess, base64
+from flask import Flask, request, jsonify, render_template, session, redirect, url_for, session, jsonify
 import psutil
 
 app = Flask(__name__)
@@ -118,6 +118,38 @@ def api_state():
         except Exception as e:
             return jsonify({'success': False, 'msg': str(e)})
     return jsonify(read_state())
+
+@app.route('/api/export')
+def api_export():
+    state = read_state()
+    txt = ""
+    for k, v in state.items():
+        if v is True: v = "true"
+        elif v is False: v = "false"
+        txt += f'{k}="{v}"\n'
+    b64 = base64.b64encode(txt.encode('utf-8')).decode('utf-8')
+    return jsonify({'export_string': f'MOJA://{b64}'})
+
+@app.route('/api/import', methods=['POST'])
+def api_import():
+    data = request.json.get('import_string', '')
+    if not data.startswith('MOJA://'):
+        return jsonify({'success': False, 'msg': 'Invalid format. Must start with MOJA://'})
+    b64 = data.replace('MOJA://', '')
+    try:
+        txt = base64.b64decode(b64).decode('utf-8')
+        new_state = {}
+        for line in txt.splitlines():
+            if '=' in line:
+                k, v = line.strip().split('=', 1)
+                v = v.strip('"\'')
+                if v == 'true': v = True
+                elif v == 'false': v = False
+                new_state[k] = v
+        write_state(new_state)
+        return jsonify({'success': True, 'state': new_state, 'msg': 'Configuration unpacked! Please review Network domains and click Save & Rebuild.'})
+    except Exception as e:
+        return jsonify({'success': False, 'msg': 'Failed to decode string'})
 
 @app.route('/api/stats')
 def api_stats():
@@ -214,6 +246,7 @@ cat << 'EOF' > /opt/cr-vpn/templates/index.html
                     <a @click="tab = 'proto'" :class="{'bg-white/10': tab=='proto'}" class="block px-6 py-3 cursor-pointer hover:bg-white/5 transition">⚡ Protocols</a>
                     <a @click="tab = 'net'" :class="{'bg-white/10': tab=='net'}" class="block px-6 py-3 cursor-pointer hover:bg-white/5 transition">🌐 Network</a>
                     <a @click="tab = 'sec'" :class="{'bg-white/10': tab=='sec'}" class="block px-6 py-3 cursor-pointer hover:bg-white/5 transition">🛡️ Security & Routing</a>
+                    <a @click="tab = 'mig'" :class="{'bg-white/10': tab=='mig'}" class="block px-6 py-3 cursor-pointer hover:bg-white/5 transition">📦 Migration</a>
                 </nav>
             </div>
             <div class="p-6">
@@ -362,7 +395,26 @@ cat << 'EOF' > /opt/cr-vpn/templates/index.html
                     </div>
                 </div>
 
-                <div class="mt-8 pt-6 border-t border-white/10 flex justify-end">
+                <div v-show="tab === 'mig'" class="space-y-6">
+                    <h2 class="text-2xl font-bold mb-6 border-b border-white/10 pb-4">Export & Import Migration</h2>
+                    <div class="glass p-6 rounded-2xl mb-6">
+                        <h3 class="text-xl font-bold mb-4">Export Current Server</h3>
+                        <p class="text-sm text-gray-400 mb-4">Generate a string containing all your current settings to migrate to another server.</p>
+                        <button @click="exportConfig" class="bg-gray-700 hover:bg-gray-600 px-6 py-2 rounded-lg font-bold transition">Generate Export String</button>
+                        <div v-if="exportStr" class="mt-4">
+                            <textarea readonly v-model="exportStr" class="w-full h-24 input-dark rounded-lg p-4 font-mono text-xs" @click="$event.target.select()"></textarea>
+                            <p class="text-xs text-green-400 mt-2">String generated! Copy it and keep it safe.</p>
+                        </div>
+                    </div>
+                    <div class="glass p-6 rounded-2xl">
+                        <h3 class="text-xl font-bold mb-4">Import to this Server</h3>
+                        <p class="text-sm text-gray-400 mb-4">Paste an export string to instantly configure this server with your old settings.</p>
+                        <textarea v-model="importStr" class="w-full h-24 input-dark rounded-lg p-4 font-mono text-xs mb-4" placeholder="MOJA://..."></textarea>
+                        <button @click="importConfig" class="btn-gradient px-6 py-2 rounded-lg font-bold text-white transition">Import Configuration</button>
+                    </div>
+                </div>
+
+                <div v-show="tab !== 'mig'" class="mt-8 pt-6 border-t border-white/10 flex justify-end">
                     <button @click="saveAndBuild" class="btn-gradient px-8 py-3 rounded-lg font-bold text-white flex items-center shadow-lg shadow-purple-500/30">
                         <span v-if="saving" class="animate-spin mr-2">⚙️</span>
                         Save & Rebuild Server
@@ -382,7 +434,9 @@ cat << 'EOF' > /opt/cr-vpn/templates/index.html
                     s: {}, // state
                     stats: { cpu: 0, mem: 0, network: { rx: '0', tx: '0' } },
                     saving: false,
-                    toast: { show: false, msg: '' }
+                    toast: { show: false, msg: '' },
+                    exportStr: '',
+                    importStr: ''
                 }
             },
             computed: {
@@ -420,6 +474,39 @@ cat << 'EOF' > /opt/cr-vpn/templates/index.html
                         this.showToast('Error saving configuration');
                     }
                     this.saving = false;
+                },
+                async exportConfig() {
+                    try {
+                        const res = await fetch('/api/export');
+                        const data = await res.json();
+                        this.exportStr = data.export_string;
+                    } catch(e) {
+                        this.showToast('Failed to export configuration');
+                    }
+                },
+                async importConfig() {
+                    if (!this.importStr.startsWith('MOJA://')) {
+                        this.showToast('Invalid string format. Must start with MOJA://');
+                        return;
+                    }
+                    try {
+                        const res = await fetch('/api/import', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ import_string: this.importStr })
+                        });
+                        const data = await res.json();
+                        if (data.success) {
+                            this.s = data.state;
+                            this.importStr = '';
+                            this.showToast(data.msg);
+                            this.tab = 'net'; // direct user to review domain
+                        } else {
+                            this.showToast(data.msg);
+                        }
+                    } catch(e) {
+                        this.showToast('Failed to import configuration');
+                    }
                 },
                 showToast(msg) {
                     this.toast = { show: true, msg };
