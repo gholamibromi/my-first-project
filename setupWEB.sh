@@ -33,11 +33,11 @@ echo "${C2}[*] Creating Python Virtual Environment...${C0}"
 python3 -m venv venv
 ./venv/bin/pip install Flask psutil >/dev/null 2>&1
 
-# Download the core engine (setupV2.sh)
+# Download the core engine (setupFINAL.sh)
 echo "${C2}[*] Downloading Core Engine...${C0}"
-curl -fsSL -o /opt/cr-vpn/setup.sh https://raw.githubusercontent.com/gholamibromi/my-first-project/main/setupV2.sh || true
+curl -fsSL -o /opt/cr-vpn/setup.sh https://raw.githubusercontent.com/gholamibromi/my-first-project/refs/heads/main/setupFINAL.sh || true
 # If the curl fails (e.g. repo not public yet), we copy it from current dir if it exists
-if [ -f /root/setupV2.sh ]; then cp /root/setupV2.sh /opt/cr-vpn/setup.sh; fi
+if [ -f /root/setupFINAL.sh ]; then cp /root/setupFINAL.sh /opt/cr-vpn/setup.sh; fi
 chmod +x /opt/cr-vpn/setup.sh
 
 # Create the Python Backend
