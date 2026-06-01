@@ -33,7 +33,7 @@ welcome_screen() {
   printf "\n" >"$TTY"
   banner "  ╔══════════════════════════════════════════════════════════════════════════════╗"
   banner "  ║                        VPN Multi-Protocol Installer                          ║"
-  banner "  ║                              Author: MOJA                                  ║"
+  banner "  ║                               Author: MOJA                                   ║"
   banner "  ║                  Supported: VLESS, Hysteria2, WARP, Nginx                    ║"
   banner "  ╚══════════════════════════════════════════════════════════════════════════════╝"
   printf "  ${CR}⚠️ هشدار آموزشی: این پروژه صرفاً جهت مقاصد تحصیلی، تحقیقاتی و دور زدن تحریم‌های ناعادلانه توسعه یافته است.${C0}\n\n" >"$TTY"
@@ -414,7 +414,6 @@ adv_core(){
     printf "  ${C2}2)${C0} VLESS-XHTTP   : ${CG}%s${C0}\n" "$($WANT_XHTTP && echo ON || echo OFF)" >"$TTY"
     printf "  ${C2}3)${C0} VLESS-Reality : ${CG}%s${C0}\n" "$($WANT_REALITY && echo ON || echo OFF)" >"$TTY"
     printf "  ${C2}4)${C0} Hysteria2     : ${CG}%s${C0}\n" "$($WANT_HY2 && echo ON || echo OFF)" >"$TTY"
-    printf "  ${C2}5)${C0} WARP Outbound : ${CG}%s${C0}\n" "$($WANT_WARP && echo ON || echo OFF)" >"$TTY"
     printf "\n  ${CR}0) Back${C0}\n\n" >"$TTY"
     local opt=""
     ask opt "Select an option" ""
@@ -423,7 +422,6 @@ adv_core(){
       2) $WANT_XHTTP && WANT_XHTTP=false || WANT_XHTTP=true ;;
       3) $WANT_REALITY && WANT_REALITY=false || WANT_REALITY=true ;;
       4) $WANT_HY2 && WANT_HY2=false || WANT_HY2=true ;;
-      5) $WANT_WARP && WANT_WARP=false || WANT_WARP=true ;;
       0) return ;;
     esac
   done
@@ -540,13 +538,15 @@ adv_routing(){
     banner "  ╚══════════════════════════════════════════╝"
     printf "  ${C3}Note: Iranian domains/IPs are always blocked to prevent IP leak to GFW.${C0}\n" >"$TTY"
     printf "  ${C2}1)${C0} Block QUIC Outbound (Drops UDP/443 to force TCP) : ${CG}%s${C0}\n" "$($BLOCK_QUIC && echo ON || echo OFF)" >"$TTY"
-    printf "  ${C2}2)${C0} IP Preference (auto / ipv4 / ipv6)               : ${CC}%s${C0}\n" "${IP_PREF:-auto}" >"$TTY"
+    printf "  ${C2}2)${C0} WARP Outbound (For blocked domains)              : ${CG}%s${C0}\n" "$($WANT_WARP && echo ON || echo OFF)" >"$TTY"
+    printf "  ${C2}3)${C0} IP Preference (auto / ipv4 / ipv6)               : ${CC}%s${C0}\n" "${IP_PREF:-auto}" >"$TTY"
     printf "\n  ${CR}0) Back${C0}\n\n" >"$TTY"
     local opt=""
     ask opt "Select an option" ""
     case "${opt:-}" in
       1) $BLOCK_QUIC && BLOCK_QUIC=false || BLOCK_QUIC=true ;;
-      2) ask_choice IP_PREF "IP Preference" "auto" "auto" "ipv4" "ipv6" ;;
+      2) $WANT_WARP && WANT_WARP=false || WANT_WARP=true ;;
+      3) ask_choice IP_PREF "IP Preference" "auto" "auto" "ipv4" "ipv6" ;;
       0) return ;;
     esac
   done
@@ -1606,6 +1606,7 @@ main_menu(){
 main(){
   if [ "${1:-}" = "--headless" ]; then
     export HEADLESS=true
+    TTY="/var/log/moja-build.log"
     load_state || true
     execute_build
     exit 0
