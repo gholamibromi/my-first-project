@@ -103,7 +103,8 @@ def logout():
 
 @app.route('/')
 def dashboard():
-    return render_template('index.html')
+    with open('/opt/cr-vpn/templates/index.html', 'r', encoding='utf-8') as f:
+        return f.read()
 
 @app.route('/api/state', methods=['GET', 'POST'])
 def api_state():
