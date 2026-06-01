@@ -32,7 +32,7 @@ welcome_screen() {
   printf "\n" >"$TTY"
   banner "  ╔══════════════════════════════════════════════════════════════════════════════╗"
   banner "  ║                        VPN Multi-Protocol Installer                          ║"
-  banner "  ║                              Author: CRt-VPN                                 ║"
+  banner "  ║                                Author: MOJA                                  ║"
   banner "  ║                  Supported: VLESS, Hysteria2, WARP, Nginx                    ║"
   banner "  ╚══════════════════════════════════════════════════════════════════════════════╝"
   printf "\n" >"$TTY"
@@ -991,8 +991,16 @@ ${ws_block}
 ${xh_block}
 
     location = /sub/${SUB_TOKEN} {
+        if (\$http_user_agent ~* "mozilla|chrome|safari|edge|applewebkit") {
+            rewrite ^ /sub/${SUB_TOKEN}_html break;
+        }
         default_type text/plain;
         alias /var/www/sub/${SUB_TOKEN}.txt;
+    }
+
+    location = /sub/${SUB_TOKEN}_html {
+        default_type text/html;
+        alias /var/www/sub/${SUB_TOKEN}.html;
     }
 
     location / {
@@ -1112,13 +1120,20 @@ gen_links(){
   $MUX && xtra+="&mux=concurrency:8"
   $FRAGMENT && xtra+="&fragment=10-20,10-20,tlshello"
   
+  local ws_idx=1 xh_idx=1
   if $WANT_WS || $WANT_XHTTP; then
     for port in "${!PORT_IPS[@]}"; do
       IFS=',' read -ra _ips <<< "${PORT_IPS[$port]}"
       for ip in "${_ips[@]:-}"; do
         [ -z "${ip:-}" ] && continue
-        $WANT_WS && LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=${FP}&type=ws&host=${DOMAIN}&path=${WS_PATH}&alpn=${ALPN}${xtra}#${CONFIG_NAME}-WS-${ip}-${port}")
-        $WANT_XHTTP && LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=${FP}&type=xhttp&host=${DOMAIN}&path=${XHTTP_PATH}&mode=auto&alpn=${ALPN}${xtra}#${CONFIG_NAME}-XHTTP-${ip}-${port}")
+        if $WANT_WS; then
+            LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=${FP}&type=ws&host=${DOMAIN}&path=${WS_PATH}&alpn=${ALPN}${xtra}#${CONFIG_NAME}-WS-$(printf "%02d" $ws_idx)")
+            ws_idx=$((ws_idx+1))
+        fi
+        if $WANT_XHTTP; then
+            LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=${FP}&type=xhttp&host=${DOMAIN}&path=${XHTTP_PATH}&mode=auto&alpn=${ALPN}${xtra}#${CONFIG_NAME}-XHTTP-$(printf "%02d" $xh_idx)")
+            xh_idx=$((xh_idx+1))
+        fi
       done
     done
   fi
@@ -1138,10 +1153,89 @@ gen_links(){
 
 gen_subscription(){
   $USE_DOMAIN || return 0
-  mkdir -p /var/www/sub
+  mkdir -p /var/www/sub /etc/vpn-installer
   printf '%s\n' "${LINKS[@]:-}" | base64 -w0 > "/var/www/sub/${SUB_TOKEN}.txt" 2>/dev/null || printf '%s\n' "${LINKS[@]:-}" | base64 | tr -d '\n' > "/var/www/sub/${SUB_TOKEN}.txt"
   SUB_URL="https://${DOMAIN}:${NGINX_PORTS[0]}/sub/${SUB_TOKEN}"
-  ok "Subscription file created."
+
+  local html_configs=""
+  local l=""
+  for l in "${LINKS[@]:-}"; do
+    html_configs+="<div class='cfg-item'>${l}</div>"
+  done
+
+  cat > "/var/www/sub/${SUB_TOKEN}.html" <<EOF
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VPN Dashboard - ${CONFIG_NAME}</title>
+<style>
+  :root { --p: #8a2be2; --r: #e50914; --bg: #09000a; }
+  body { margin:0; font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, var(--bg) 0%, #170014 50%, #1a0005 100%); color: #fff; min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 20px;}
+  .glass { background: rgba(255,255,255,0.03); backdrop-filter: blur(15px); border: 1px solid rgba(255,255,255,0.05); border-radius: 20px; box-shadow: 0 8px 32px 0 rgba(0,0,0,0.5); }
+  .container { width: 100%; max-width: 650px; padding: 30px; }
+  h1 { text-align: center; background: -webkit-linear-gradient(45deg, var(--p), var(--r)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 30px; font-size: 2.2em; }
+  .stat-box { display: flex; justify-content: space-between; padding: 20px; border-radius: 15px; margin-bottom: 30px; background: rgba(0,0,0,0.4); border-left: 4px solid var(--p); }
+  .stat { display: flex; flex-direction: column; text-align: center; width: 30%; }
+  .stat span { font-size: 0.8rem; color: #aaa; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
+  .stat strong { font-size: 1.1rem; font-weight: 600; color: #e0e0e0; }
+  .btn { display: block; width: 100%; padding: 16px; border-radius: 12px; border: none; font-size: 1.1rem; font-weight: bold; cursor: pointer; text-align: center; text-decoration: none; margin-bottom: 15px; transition: all 0.3s ease; box-sizing: border-box; }
+  .btn-hiddify { background: linear-gradient(45deg, #1e90ff, #8a2be2); color: white; box-shadow: 0 4px 15px rgba(138, 43, 226, 0.4); }
+  .btn-v2ray { background: linear-gradient(45deg, #ff4500, #e50914); color: white; box-shadow: 0 4px 15px rgba(229, 9, 20, 0.4); }
+  .btn:hover { opacity: 0.9; transform: translateY(-3px); box-shadow: 0 6px 20px rgba(255,255,255,0.1); }
+  .cfg-list { margin-top: 30px; max-height: 400px; overflow-y: auto; padding-right: 10px; }
+  .cfg-list::-webkit-scrollbar { width: 6px; }
+  .cfg-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+  .cfg-item { background: rgba(255,255,255,0.03); padding: 15px; border-radius: 10px; margin-bottom: 12px; font-family: monospace; word-break: break-all; font-size: 0.85rem; border-left: 3px solid var(--r); color: #ccc; }
+  .footer { text-align: center; margin-top: 30px; font-size: 0.85rem; color: #666; }
+</style>
+</head>
+<body>
+<div class="glass container">
+  <h1>${CONFIG_NAME} Panel</h1>
+  
+  <div class="stat-box">
+    <div class="stat"><span>Traffic TX</span><strong>0 MB</strong></div>
+    <div class="stat"><span>Traffic RX</span><strong>0 MB</strong></div>
+    <div class="stat"><span>Total Usage</span><strong>0 MB</strong></div>
+  </div>
+  
+  <h3>Quick Import</h3>
+  <a href="hiddify://install-sub?url=${SUB_URL}&name=${CONFIG_NAME}" class="btn btn-hiddify">🚀 Import to Hiddify</a>
+  <button onclick="navigator.clipboard.writeText('${SUB_URL}'); alert('Subscription Link Copied!');" class="btn btn-v2ray">📋 Copy Subscription Link</button>
+  
+  <h3>Nodes (${#LINKS[@]})</h3>
+  <div class="cfg-list">
+    ${html_configs}
+  </div>
+  
+  <div class="footer">Created by CR-VPN | Generated: $(date "+%Y-%m-%d %H:%M")</div>
+</div>
+</body>
+</html>
+EOF
+
+  cat > /etc/vpn-installer/update_html.sh <<'CRONEOF'
+#!/usr/bin/env bash
+source /etc/vpn-installer/state.env
+[ -z "$DOMAIN" ] && exit 0
+rx="0 MB"; tx="0 MB"; total="0 MB"
+if command -v vnstat >/dev/null 2>&1; then
+  vout=$(vnstat --oneline 2>/dev/null || true)
+  if [ -n "$vout" ]; then
+      rx=$(echo "$vout" | cut -d';' -f4); tx=$(echo "$vout" | cut -d';' -f5); total=$(echo "$vout" | cut -d';' -f6)
+  fi
+fi
+sed -i -E "s|<span>Traffic TX</span><strong>.*</strong>|<span>Traffic TX</span><strong>$tx</strong>|" /var/www/sub/${SUB_TOKEN}.html
+sed -i -E "s|<span>Traffic RX</span><strong>.*</strong>|<span>Traffic RX</span><strong>$rx</strong>|" /var/www/sub/${SUB_TOKEN}.html
+sed -i -E "s|<span>Total Usage</span><strong>.*</strong>|<span>Total Usage</span><strong>$total</strong>|" /var/www/sub/${SUB_TOKEN}.html
+sed -i -E "s|Generated: .*<|Generated: $(date "+%Y-%m-%d %H:%M")<|" /var/www/sub/${SUB_TOKEN}.html
+CRONEOF
+  chmod +x /etc/vpn-installer/update_html.sh
+  /etc/vpn-installer/update_html.sh
+  (crontab -l 2>/dev/null | grep -v "/etc/vpn-installer/update_html.sh"; echo "*/10 * * * * /etc/vpn-installer/update_html.sh") | crontab -
+
+  ok "Subscription file & Dashboard UI created."
 }
 
 open_firewall(){
@@ -1331,8 +1425,119 @@ full_removal(){
     fi
     
     systemctl daemon-reload
+    (crontab -l 2>/dev/null | grep -v "/etc/vpn-installer/update_html.sh") | crontab -
     ok "Complete removal finished."
     exit 0
+  fi
+}
+
+migration_menu(){
+  while true; do
+    clear_screen
+    banner "  ╔══════════════════════════════════════════╗"
+    banner "  ║          Export/Import Migration         ║"
+    banner "  ╚══════════════════════════════════════════╝"
+    printf "  ${C2}1)${C0} Export Current Configuration\n" >"$TTY"
+    printf "  ${C2}2)${C0} Import Configuration\n" >"$TTY"
+    printf "  ${CR}0)${C0} Back\n\n" >"$TTY"
+    
+    local opt=""
+    ask opt "Please select an option" ""
+    case "${opt:-}" in
+      1) export_config ;;
+      2) import_config ;;
+      0) return ;;
+    esac
+  done
+}
+
+export_config(){
+  clear_screen
+  banner "  ╔══════════════════════════════════════════╗"
+  banner "  ║            Export Configuration          ║"
+  banner "  ╚══════════════════════════════════════════╝"
+  if ! load_state; then warn "No config found to export."; press_enter; return; fi
+  
+  local txt="DOMAIN=\"$DOMAIN\"
+NGINX_PORTS=\"${NGINX_PORTS[*]:-}\"
+REALITY_PORT=\"$REALITY_PORT\"
+HY2_PORT=\"$HY2_PORT\"
+SUB_TOKEN=\"$SUB_TOKEN\"
+UUID=\"$UUID\"
+REALITY_PRIV=\"$REALITY_PRIV\"
+REALITY_PUB=\"$REALITY_PUB\"
+REALITY_SID=\"$REALITY_SID\"
+HY2_PASS=\"$HY2_PASS\"
+WS_PATH=\"$WS_PATH\"
+XHTTP_PATH=\"$XHTTP_PATH\"
+SNI=\"$SNI\"
+REALITY_SNIS=\"$REALITY_SNIS\"
+CONFIG_NAME=\"$CONFIG_NAME\"
+TLS_VER=\"$TLS_VER\"
+ALPN=\"$ALPN\"
+BLOCK_QUIC=$BLOCK_QUIC
+IP_PREF=\"$IP_PREF\"
+MUX=$MUX
+FRAGMENT=$FRAGMENT
+WANT_WS=$WANT_WS
+WANT_XHTTP=$WANT_XHTTP
+WANT_REALITY=$WANT_REALITY
+WANT_HY2=$WANT_HY2
+WANT_WARP=$WANT_WARP"
+
+  local p
+  for p in "${NGINX_PORTS[@]:-}"; do
+     txt+=$'\n'"PORT_IPS_${p}=\"${PORT_IPS[$p]:-}\""
+  done
+
+  local b64
+  b64=$(printf "%s" "$txt" | base64 -w0)
+  printf "\n${C2}Copy the following string completely:${C0}\n\n" >"$TTY"
+  printf "${CC}CR-VPN://%s${C0}\n\n" "$b64" >"$TTY"
+  press_enter
+}
+
+import_config(){
+  clear_screen
+  banner "  ╔══════════════════════════════════════════╗"
+  banner "  ║            Import Configuration          ║"
+  banner "  ╚══════════════════════════════════════════╝"
+  printf "  ${C3}Paste your CR-VPN:// string below:${C0}\n" >"$TTY"
+  local str=""
+  ask str "> " ""
+  if [[ "$str" != CR-VPN://* ]]; then
+    warn "Invalid format! Must start with CR-VPN://"
+    press_enter
+    return
+  fi
+  local b64="${str#CR-VPN://}"
+  local txt
+  txt=$(printf "%s" "$b64" | base64 -d 2>/dev/null || true)
+  if ! echo "$txt" | grep -q "DOMAIN"; then
+    warn "Corrupted or invalid config string."
+    press_enter
+    return
+  fi
+  
+  eval "$txt"
+  if [ -n "$DOMAIN" ]; then USE_DOMAIN=true; else USE_DOMAIN=false; fi
+  
+  local p varname
+  if [ -n "${NGINX_PORTS:-}" ]; then
+    NGINX_PORTS=($NGINX_PORTS)
+    for p in "${NGINX_PORTS[@]}"; do
+      varname="PORT_IPS_${p}"
+      PORT_IPS[$p]="${!varname:-}"
+    done
+  fi
+
+  save_state
+  ok "Configuration Imported successfully!"
+  printf "Do you want to rebuild the server now with these settings? (y/n)\n" >"$TTY"
+  local ans=""
+  ask ans ">" "y"
+  if [ "$ans" = "y" ]; then
+    execute_build
   fi
 }
 
@@ -1344,8 +1549,9 @@ main_menu(){
     printf "  ${C2}3)${C0} Rebuild Configurations\n" >"$TTY"
     printf "  ${C2}4)${C0} Restore Backup\n" >"$TTY"
     printf "  ${C2}5)${C0} Status (Data & Uptime)\n" >"$TTY"
-    printf "  ${C2}6)${C0} Complete Removal\n" >"$TTY"
-    printf "  ${CR}7)${C0} Exit\n\n" >"$TTY"
+    printf "  ${C2}6)${C0} Export/Import Migration\n" >"$TTY"
+    printf "  ${C2}7)${C0} Complete Removal\n" >"$TTY"
+    printf "  ${CR}8)${C0} Exit\n\n" >"$TTY"
     
     local opt=""
     ask opt "Please select an option" ""
@@ -1355,8 +1561,9 @@ main_menu(){
       3) rebuild_config ;;
       4) restore_menu ;;
       5) show_status ;;
-      6) full_removal ;;
-      7) clear_screen; ok "Goodbye!"; exit 0 ;;
+      6) migration_menu ;;
+      7) full_removal ;;
+      8) clear_screen; ok "Goodbye!"; exit 0 ;;
       *) warn "Invalid option"; press_enter ;;
     esac
   done
