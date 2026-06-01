@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # نصب چندپروتکلی: VLESS-WS / VLESS-XHTTP / VLESS-Reality / Hysteria2
+# + Sniffing + WARP outbound + Routing + Multi-address subscription
 # UI انگلیسی، کامنت‌ها فارسی. ورودی از /dev/tty خوانده می‌شود.
 set -euo pipefail
 
@@ -15,12 +16,9 @@ MAX_TRIES=3
 
 RE_DOMAIN='^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}$'
 RE_EMAIL='^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'
-# اصلاح باگ: قبلاً سه بک‌اسلش بود و با PORT_IPS[...] هرگز مطابقت نمی‌کرد
 RE_EXT='^PORT_IPS\[([0-9]+)\]="?([0-9A-Za-z.,:_-]+)"?$'
-# مسیر ساب: فقط یک سگمنت معتبر، بدون اسلش
 RE_SUBPATH='^[A-Za-z0-9._-]+$'
 
-# پورت‌های HTTPS رسمی که Cloudflare پروکسی می‌کند
 CF_PORTS=(443 2053 2083 2087 2096 8443)
 
 ask(){
@@ -98,8 +96,7 @@ is_cf_port(){
   for e in "${CF_PORTS[@]}"; do [ "$p" = "$e" ] && return 0; done
   return 1
 }
-
-# ---------- تشخیص نصب قبلی + بکاپ + پاک‌سازی امن ----------
+# ---------- تشخیص نصب قبلی + بکاپ + پاک‌سازی عمیق ----------
 preflight_check(){
   local existing=false
   [ -f /usr/local/etc/xray/config.json ] && existing=true
@@ -113,7 +110,7 @@ preflight_check(){
   [ -f /etc/hysteria/config.yaml ]       && printf "    - /etc/hysteria/config.yaml\n" >"$TTY"
 
   printf "\n${C2}What do you want to do?${C0}\n" >"$TTY"
-  printf "  1) Backup old configs, then reinstall (old client links stop working)\n" >"$TTY"
+  printf "  1) Backup + deep-clean old install, then reinstall (old links stop working)\n" >"$TTY"
   printf "  2) Abort and keep everything as-is\n" >"$TTY"
   ask_choice EX_CH "Choice" "2" 1 2
   [ "$EX_CH" = "2" ] && { ok "Aborted. Nothing changed."; exit 0; }
@@ -127,30 +124,65 @@ backup_existing(){
   ts="$(date +%Y%m%d-%H%M%S)"; bdir="/root/vpn-backup-${ts}"
   mkdir -p "$bdir"
   cp -a /usr/local/etc/xray/config.json "$bdir/" 2>/dev/null || true
-  cp -a /etc/nginx/conf.d            "$bdir/nginx-conf.d" 2>/dev/null || true
-  cp -a /etc/hysteria/config.yaml    "$bdir/" 2>/dev/null || true
-  cp -a /var/www/sub                 "$bdir/sub" 2>/dev/null || true
+  cp -a /etc/nginx/conf.d               "$bdir/nginx-conf.d" 2>/dev/null || true
+  cp -a /etc/hysteria/config.yaml       "$bdir/" 2>/dev/null || true
+  cp -a /var/www/sub                    "$bdir/sub" 2>/dev/null || true
   ok "Old configs backed up to: ${bdir}"
 }
 
 cleanup_existing(){
-  systemctl stop xray            2>/dev/null || true
-  systemctl stop nginx           2>/dev/null || true
-  systemctl stop hysteria-server 2>/dev/null || true
-  # فقط فایل‌های ساخته‌ی همین اسکریپت؛ به بقیه‌ی Nginx دست نمی‌زنیم
+  # توقف و غیرفعال‌سازی همه سرویس‌های مرتبط
+  local svc
+  for svc in xray nginx hysteria-server hysteria; do
+    systemctl stop    "$svc" 2>/dev/null || true
+    systemctl disable "$svc" 2>/dev/null || true
+  done
+
+  # حذف کامل کانفیگ و سکرت‌های Xray
+  rm -rf /usr/local/etc/xray 2>/dev/null || true
+
+  # حذف فایل‌های Nginx ساخته‌شده توسط اسکریپت
   rm -f /etc/nginx/conf.d/xray.conf 2>/dev/null || true
   rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-  rm -f /var/www/sub/*.txt 2>/dev/null || true
-  ok "Old script-managed configs removed (backup kept)."
-}
 
+  # هر فایل conf.d که به بک‌اند داخلی یا مسیر ساب ما اشاره دارد
+  local f
+  for f in /etc/nginx/conf.d/*.conf; do
+    [ -e "$f" ] || continue
+    if grep -qE '127\.0\.0\.1:(10001|10002)|/var/www/sub' "$f" 2>/dev/null; then
+      rm -f "$f"
+      warn "Removed leftover nginx file: $f"
+    fi
+  done
+
+  # حذف فایل‌های وب و گواهی self-signed مربوط به Xray
+  rm -rf /var/www/sub 2>/dev/null || true
+  rm -f  /var/www/html/index.html 2>/dev/null || true
+  rm -rf /etc/ssl/xray 2>/dev/null || true
+
+  # حذف Hysteria2 — گواهی Let's Encrypt در /etc/letsencrypt دست‌نخورده می‌ماند
+  rm -f  /etc/hysteria/config.yaml 2>/dev/null || true
+  rm -f  /etc/hysteria/cert.pem /etc/hysteria/key.pem 2>/dev/null || true
+  rm -rf /etc/systemd/system/hysteria-server.service.d 2>/dev/null || true
+
+  systemctl daemon-reload 2>/dev/null || true
+
+  if command -v nginx >/dev/null 2>&1; then
+    nginx -t >/dev/null 2>&1 \
+      && ok "Remaining Nginx config is valid." \
+      || warn "Nginx has other sites or empty config; install step will fix it."
+  fi
+  ok "Deep cleanup done."
+}
 # ---------- ثابت‌ها ----------
 WS_INT=10001
 XHTTP_INT=10002
 HY2_SNI="www.bing.com"
+WARP_PORT=40000
 
 # ---------- وضعیت‌ها ----------
 WANT_WS=false; WANT_XHTTP=false; WANT_REALITY=false; WANT_HY2=false
+WANT_WARP=false
 USE_DOMAIN=false
 NGINX_PORTS=()
 declare -A PORT_IPS
@@ -165,26 +197,84 @@ command -v dnf     >/dev/null 2>&1 && PKG=dnf
 command -v yum     >/dev/null 2>&1 && [ -z "$PKG" ] && PKG=yum
 [ -n "$PKG" ] || die "No supported package manager found."
 
+tune_kernel(){
+  # افزایش بافر UDP برای QUIC/Hysteria2 — رفع کندی و بخشی از مشکل -1 ping
+  cat > /etc/sysctl.d/99-hysteria.conf <<'EOF'
+net.core.rmem_max=16777216
+net.core.wmem_max=16777216
+net.core.rmem_default=1048576
+net.core.wmem_default=1048576
+EOF
+  # فعال‌سازی BBR در صورت پشتیبانی کرنل
+  if modprobe tcp_bbr 2>/dev/null && \
+     sysctl net.ipv4.tcp_available_congestion_control 2>/dev/null | grep -q bbr; then
+    cat > /etc/sysctl.d/99-bbr.conf <<'EOF'
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+EOF
+  fi
+  sysctl --system >/dev/null 2>&1 || true
+  ok "Kernel/UDP buffers tuned (QUIC-friendly)."
+}
+
+install_warp(){
+  if command -v warp-cli >/dev/null 2>&1; then
+    ok "WARP already installed."
+  else
+    case "$PKG" in
+      apt)
+        curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
+          | gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+        echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(. /etc/os-release && echo "$VERSION_CODENAME") main" \
+          > /etc/apt/sources.list.d/cloudflare-client.list
+        apt-get update -y
+        apt-get install -y cloudflare-warp || { warn "WARP install failed; disabling WARP."; WANT_WARP=false; return 0; }
+        ;;
+      dnf|yum)
+        $PKG install -y cloudflare-warp 2>/dev/null || {
+          warn "WARP package not available on this distro; disabling WARP."
+          WANT_WARP=false; return 0
+        }
+        ;;
+    esac
+  fi
+  # ثبت و اتصال WARP در حالت proxy روی 127.0.0.1:40000
+  warp-cli --accept-tos registration new 2>/dev/null \
+    || warp-cli --accept-tos register 2>/dev/null || true
+  warp-cli --accept-tos mode proxy 2>/dev/null \
+    || warp-cli set-mode proxy 2>/dev/null || true
+  warp-cli --accept-tos connect 2>/dev/null \
+    || warp-cli connect 2>/dev/null || true
+  sleep 3
+  if warp-cli status 2>/dev/null | grep -qi connected; then
+    ok "WARP connected (SOCKS5 on 127.0.0.1:${WARP_PORT})."
+  else
+    warn "WARP not confirmed connected. Check: warp-cli status"
+  fi
+}
+
 install_deps(){
   case "$PKG" in
     apt)
       export DEBIAN_FRONTEND=noninteractive
       apt-get update -y
-      apt-get install -y curl openssl jq nginx certbot ufw ca-certificates
+      apt-get install -y curl openssl jq nginx certbot ufw ca-certificates gnupg
       ;;
     dnf|yum)
       $PKG install -y curl openssl jq nginx certbot ufw ca-certificates || true
       ;;
   esac
+
   if ! command -v xray >/dev/null 2>&1; then
     bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
   fi
   if $WANT_HY2 && ! command -v hysteria >/dev/null 2>&1; then
     bash <(curl -fsSL https://get.hy2.sh/)
   fi
+  $WANT_WARP && install_warp
+  $WANT_HY2  && tune_kernel
   ok "Dependencies installed."
 }
-
 menu_mode(){
   printf "\n${C2}=== Select protocols ===${C0}\n" >"$TTY"
   printf "  1) All (WS + XHTTP + Reality + Hysteria2)\n" >"$TTY"
@@ -208,33 +298,51 @@ menu_mode(){
   esac
   if $WANT_WS || $WANT_XHTTP; then USE_DOMAIN=true; fi
   $WANT_WS || $WANT_XHTTP || $WANT_REALITY || $WANT_HY2 || die "Nothing selected."
+
+  local w
+  ask_yesno w "Enable WARP outbound for blocked sites (Google/OpenAI/Spotify/Netflix...)?" "y"
+  [ "$w" = y ] && WANT_WARP=true
 }
 
-# جمع‌آوری چند پورت برای Nginx (فقط پورت‌های مجاز Cloudflare)
+# ---------- منوی عددی uTLS ----------
+menu_fingerprint(){
+  printf "\n${C2}=== uTLS Fingerprint ===${C0}\n" >"$TTY"
+  printf "  1) chrome      (recommended)\n" >"$TTY"
+  printf "  2) firefox\n" >"$TTY"
+  printf "  3) safari\n" >"$TTY"
+  printf "  4) ios\n" >"$TTY"
+  printf "  5) android\n" >"$TTY"
+  printf "  6) edge\n" >"$TTY"
+  printf "  7) random\n" >"$TTY"
+  printf "  8) randomized\n" >"$TTY"
+  ask_choice FP_NUM "Choice" "1" 1 2 3 4 5 6 7 8
+  case "$FP_NUM" in
+    1) FP="chrome"     ;;
+    2) FP="firefox"    ;;
+    3) FP="safari"     ;;
+    4) FP="ios"        ;;
+    5) FP="android"    ;;
+    6) FP="edge"       ;;
+    7) FP="random"     ;;
+    8) FP="randomized" ;;
+  esac
+  ok "Fingerprint: ${FP}"
+}
+
 collect_nginx_ports(){
   NGINX_PORTS=()
   printf "\n${C2}Nginx port(s) — Cloudflare HTTPS only: ${CF_PORTS[*]}${C0}\n" >"$TTY"
   printf "  Enter one port at a time. Press Enter on empty line to finish.\n" >"$TTY"
   local p def dup x
   while true; do
-    # پورت اول پیش‌فرض 2096؛ بعد از آن خالی یعنی پایان
     if [ "${#NGINX_PORTS[@]}" -eq 0 ]; then def="2096"; else def=""; fi
     ask p "Nginx port (Enter to finish)" "$def"
     if [ -z "$p" ]; then
-      if [ "${#NGINX_PORTS[@]}" -eq 0 ]; then
-        warn "At least one port is required."
-        continue
-      fi
+      if [ "${#NGINX_PORTS[@]}" -eq 0 ]; then warn "At least one port is required."; continue; fi
       break
     fi
-    if ! [[ "$p" =~ ^[0-9]+$ ]]; then
-      warn "Not a number. Try again."
-      continue
-    fi
-    if ! is_cf_port "$p"; then
-      warn "$p is not a Cloudflare HTTPS port. Allowed: ${CF_PORTS[*]}"
-      continue
-    fi
+    if ! [[ "$p" =~ ^[0-9]+$ ]]; then warn "Not a number. Try again."; continue; fi
+    if ! is_cf_port "$p"; then warn "$p is not a Cloudflare HTTPS port. Allowed: ${CF_PORTS[*]}"; continue; fi
     dup=false
     for x in "${NGINX_PORTS[@]}"; do [ "$x" = "$p" ] && dup=true && break; done
     if $dup; then warn "Port $p already added."; continue; fi
@@ -246,11 +354,10 @@ collect_nginx_ports(){
 
 collect_external_proxies(){
   EXT_COUNT=0
-  printf "\n${C2}External (CDN clean) proxies${C0}\n" >"$TTY"
+  printf "\n${C2}External (CDN clean) proxies — multiple addresses = redundancy in sub${C0}\n" >"$TTY"
   printf "  Paste lines in this EXACT format, one per line:\n" >"$TTY"
   printf '    PORT_IPS[2096]="104.19.184.210,104.27.53.171"\n' >"$TTY"
   printf "  Port MUST be one assigned to Nginx: ${NGINX_PORTS[*]}\n" >"$TTY"
-  printf "  IPs should be clean Cloudflare edge IPs.\n" >"$TTY"
   printf "  Finish with an empty line. Leave empty to skip.\n" >"$TTY"
   local line port ips found p
   while true; do
@@ -262,10 +369,7 @@ collect_external_proxies(){
       port="${BASH_REMATCH[1]}"; ips="${BASH_REMATCH[2]}"
       found=false
       for p in "${NGINX_PORTS[@]}"; do [ "$port" = "$p" ] && found=true && break; done
-      if ! $found; then
-        warn "Port ${port} is NOT in Nginx list (${NGINX_PORTS[*]}). Ignored."
-        continue
-      fi
+      if ! $found; then warn "Port ${port} is NOT in Nginx list (${NGINX_PORTS[*]}). Ignored."; continue; fi
       PORT_IPS["$port"]="$ips"
       EXT_COUNT=$((EXT_COUNT+1))
       ok "Added: port ${port} -> ${ips}"
@@ -274,9 +378,8 @@ collect_external_proxies(){
     fi
   done
 }
-
 collect_inputs(){
-  SERVER_IP="$(curl -fsSL https://api.ipify.org || hostname -I | awk '{print $1}')"
+  SERVER_IP="$(curl -fsSL https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')"
   HY2_PORT=36712
   REALITY_PORT=8443
 
@@ -286,9 +389,9 @@ collect_inputs(){
   ask_choice PORT_MODE "Choice" "1" 1 2
 
   if [ "$PORT_MODE" = "2" ]; then
-    $USE_DOMAIN     && collect_nginx_ports
-    $WANT_HY2       && ask_port HY2_PORT "Hysteria2 port (UDP)" "36712"
-    $WANT_REALITY   && ask_port REALITY_PORT "Reality port (direct TCP)" "8443"
+    $USE_DOMAIN   && collect_nginx_ports
+    $WANT_HY2     && ask_port HY2_PORT "Hysteria2 port (UDP)" "36712"
+    $WANT_REALITY && ask_port REALITY_PORT "Reality port (direct TCP)" "8443"
   else
     $USE_DOMAIN && NGINX_PORTS=(2096)
   fi
@@ -309,14 +412,12 @@ collect_inputs(){
     fi
   fi
 
-  printf "\n${C2}TLS fingerprint (uTLS):${C0} chrome / firefox / safari / randomized\n" >"$TTY"
-  ask_choice FP "Choice" "chrome" chrome firefox safari randomized
+  menu_fingerprint
 
   if $WANT_REALITY; then
     ask_valid SNI "SNI/destination for Reality (a real website)" "$RE_DOMAIN" "www.microsoft.com"
   fi
 
-  # external proxy: پورت‌های Nginx الان قطعی شده‌اند
   if $WANT_WS || $WANT_XHTTP; then
     while true; do
       collect_external_proxies
@@ -334,25 +435,23 @@ collect_inputs(){
 
   ask CONFIG_NAME "A name for your configs" "MyVPN"
 
-  # مسیر ساب: خالی=رندوم، در غیر این صورت اعتبارسنجی سگمنت
   if $USE_DOMAIN; then
     ask SUB_PATH_IN "Subscription path (Enter for random)" ""
     if [ -n "$SUB_PATH_IN" ]; then
       if [[ "$SUB_PATH_IN" =~ $RE_SUBPATH ]]; then
-        SUB_TOKEN="$SUB_PATH_IN"
-        ok "Subscription path set to: ${SUB_TOKEN}"
+        SUB_TOKEN="$SUB_PATH_IN"; ok "Subscription path set to: ${SUB_TOKEN}"
       else
-        warn "Invalid path (allowed: letters, digits, . _ - ; no slash). Using random."
+        warn "Invalid path (no slash). Using random."
         SUB_TOKEN="$(openssl rand -hex 16)"
       fi
     fi
   fi
 }
+
 gen_secrets(){
   UUID="$(xray uuid)"
   WS_PATH="/$(openssl rand -hex 4)-ws"
   XHTTP_PATH="/$(openssl rand -hex 4)-xh"
-  # اگر کاربر مسیر ساب را تعیین کرده، حفظ شود؛ وگرنه رندوم
   SUB_TOKEN="${SUB_TOKEN:-$(openssl rand -hex 16)}"
   HY2_PASS="$(openssl rand -hex 12)"
 
@@ -365,19 +464,20 @@ gen_secrets(){
   fi
   ok "Secrets generated."
 }
-
 write_xray(){
   local inbounds=() joined
   mkdir -p /usr/local/etc/xray
 
+  # بلوک Sniffing مشترک همه inboundها
+  local SNIFF='"sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":false}'
+
   if $WANT_WS; then
     inbounds+=("$(cat <<EOF
 {
-  "listen": "127.0.0.1",
-  "port": ${WS_INT},
-  "protocol": "vless",
-  "settings": { "clients": [ { "id": "${UUID}" } ], "decryption": "none" },
-  "streamSettings": { "network": "ws", "wsSettings": { "path": "${WS_PATH}" } }
+  "listen":"127.0.0.1","port":${WS_INT},"protocol":"vless","tag":"in-ws",
+  "settings":{"clients":[{"id":"${UUID}"}],"decryption":"none"},
+  "streamSettings":{"network":"ws","wsSettings":{"path":"${WS_PATH}"}},
+  ${SNIFF}
 }
 EOF
 )")
@@ -386,11 +486,10 @@ EOF
   if $WANT_XHTTP; then
     inbounds+=("$(cat <<EOF
 {
-  "listen": "127.0.0.1",
-  "port": ${XHTTP_INT},
-  "protocol": "vless",
-  "settings": { "clients": [ { "id": "${UUID}" } ], "decryption": "none" },
-  "streamSettings": { "network": "xhttp", "xhttpSettings": { "path": "${XHTTP_PATH}", "mode": "auto" } }
+  "listen":"127.0.0.1","port":${XHTTP_INT},"protocol":"vless","tag":"in-xh",
+  "settings":{"clients":[{"id":"${UUID}"}],"decryption":"none"},
+  "streamSettings":{"network":"xhttp","xhttpSettings":{"path":"${XHTTP_PATH}","mode":"auto"}},
+  ${SNIFF}
 }
 EOF
 )")
@@ -399,44 +498,56 @@ EOF
   if $WANT_REALITY; then
     inbounds+=("$(cat <<EOF
 {
-  "listen": "0.0.0.0",
-  "port": ${REALITY_PORT},
-  "protocol": "vless",
-  "settings": {
-    "clients": [ { "id": "${UUID}", "flow": "xtls-rprx-vision" } ],
-    "decryption": "none"
-  },
-  "streamSettings": {
-    "network": "tcp",
-    "security": "reality",
-    "realitySettings": {
-      "show": false,
-      "dest": "${SNI}:443",
-      "xver": 0,
-      "serverNames": [ "${SNI}" ],
-      "privateKey": "${REALITY_PRIV}",
-      "shortIds": [ "${REALITY_SID}" ]
-    }
-  }
+  "listen":"0.0.0.0","port":${REALITY_PORT},"protocol":"vless","tag":"in-reality",
+  "settings":{"clients":[{"id":"${UUID}","flow":"xtls-rprx-vision"}],"decryption":"none"},
+  "streamSettings":{"network":"tcp","security":"reality",
+    "realitySettings":{"show":false,"dest":"${SNI}:443","xver":0,
+      "serverNames":["${SNI}"],"privateKey":"${REALITY_PRIV}","shortIds":["${REALITY_SID}"]}},
+  ${SNIFF}
 }
 EOF
 )")
   fi
 
   joined="$(IFS=,; echo "${inbounds[*]}")"
+
+  # ---------- outbounds ----------
+  local OUTBOUNDS WARP_RULE=""
+  if $WANT_WARP; then
+    OUTBOUNDS='[{"protocol":"freedom","tag":"direct"},{"protocol":"blackhole","tag":"block"},{"protocol":"socks","tag":"warp","settings":{"servers":[{"address":"127.0.0.1","port":'"${WARP_PORT}"'}]}}]'
+    WARP_RULE='{"type":"field","outboundTag":"warp","domain":["geosite:google","geosite:openai","geosite:netflix","geosite:spotify","domain:claude.ai","domain:anthropic.com","domain:chatgpt.com"]},'
+  else
+    OUTBOUNDS='[{"protocol":"freedom","tag":"direct"},{"protocol":"blackhole","tag":"block"}]'
+  fi
+
+  # ---------- routing: block torrent + block private + direct داخلی ----------
+  local ROUTING
+  ROUTING=$(cat <<EOF
+{
+  "domainStrategy":"IPIfNonMatch",
+  "rules":[
+    ${WARP_RULE}
+    {"type":"field","protocol":["bittorrent"],"outboundTag":"block"},
+    {"type":"field","outboundTag":"block","ip":["geoip:private"]},
+    {"type":"field","outboundTag":"direct","domain":["geosite:category-ir"]},
+    {"type":"field","outboundTag":"direct","ip":["geoip:ir"]}
+  ]
+}
+EOF
+)
+
   cat > /usr/local/etc/xray/config.json <<EOF
 {
-  "log": { "loglevel": "warning" },
-  "inbounds": [ ${joined} ],
-  "outbounds": [ { "protocol": "freedom", "tag": "direct" } ]
+  "log":{"loglevel":"warning"},
+  "inbounds":[ ${joined} ],
+  "outbounds":${OUTBOUNDS},
+  "routing":${ROUTING}
 }
 EOF
 
   xray -test -config /usr/local/etc/xray/config.json >"$TTY" 2>&1 || die "Xray config test failed."
-  ok "Xray config written."
+  ok "Xray config written (sniffing + routing$([ "$WANT_WARP" = true ] && echo ' + WARP'))."
 }
-
-# ---------- ساخت کانفیگ Nginx (چند پورت) ----------
 write_nginx(){
   $USE_DOMAIN || return 0
   mkdir -p /etc/ssl/xray /var/www/html /var/www/sub
@@ -450,7 +561,6 @@ write_nginx(){
   echo "<html><body><h1>It works.</h1></body></html>" > /var/www/html/index.html
   rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 
-  # ساخت خطوط listen برای تمام پورت‌های انتخابی
   local listens="" p
   for p in "${NGINX_PORTS[@]}"; do
     listens+="    listen ${p} ssl;"$'\n'
@@ -517,7 +627,6 @@ EOF
   nginx -t >"$TTY" 2>&1 || die "Nginx config test failed."
   ok "Nginx config written."
 }
-# ---------- ساخت کانفیگ Hysteria2 ----------
 write_hysteria(){
   $WANT_HY2 || return 0
   mkdir -p /etc/hysteria
@@ -537,12 +646,50 @@ write_hysteria(){
     key_path="/etc/hysteria/key.pem"
   fi
 
+  # بخش WARP برای HY2 (اختیاری) از طریق ACL + outbound socks5
+  local warp_block=""
+  if $WANT_WARP; then
+    warp_block=$(cat <<EOF
+
+outbounds:
+  - name: direct
+    type: direct
+  - name: warp
+    type: socks5
+    socks5:
+      addr: 127.0.0.1:${WARP_PORT}
+
+acl:
+  inline:
+    - warp(suffix:google.com)
+    - warp(suffix:googlevideo.com)
+    - warp(suffix:gstatic.com)
+    - warp(suffix:openai.com)
+    - warp(suffix:chatgpt.com)
+    - warp(suffix:claude.ai)
+    - warp(suffix:anthropic.com)
+    - warp(suffix:spotify.com)
+    - warp(suffix:netflix.com)
+    - direct(all)
+EOF
+)
+  fi
+
   cat > /etc/hysteria/config.yaml <<EOF
 listen: :${HY2_PORT}
 
 tls:
   cert: ${cert_path}
   key: ${key_path}
+
+quic:
+  initStreamReceiveWindow: 8388608
+  maxStreamReceiveWindow: 8388608
+  initConnReceiveWindow: 20971520
+  maxConnReceiveWindow: 20971520
+  maxIdleTimeout: 30s
+  maxIncomingStreams: 1024
+  disablePathMTUDiscovery: false
 
 auth:
   type: password
@@ -553,42 +700,41 @@ masquerade:
   proxy:
     url: https://${HY2_SNI}
     rewriteHost: true
+  listenHTTP: ""
+  listenHTTPS: ""
+${warp_block}
 EOF
 
-  # سرویس رسمی Hysteria2 با کاربر غیرروت اجرا می‌شود و privkey لتس‌انکریپت را
-  # نمی‌تواند بخواند؛ با override آن را روت اجرا می‌کنیم.
+  # سرویس رسمی با کاربر غیرروت اجرا می‌شود و privkey لتس‌انکریپت را نمی‌خواند؛ روت اجرا می‌کنیم
   mkdir -p /etc/systemd/system/hysteria-server.service.d
   cat > /etc/systemd/system/hysteria-server.service.d/override.conf <<EOF
 [Service]
 User=root
 Group=root
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
 EOF
   systemctl daemon-reload
-  ok "Hysteria2 config written."
-}
 
-# ---------- تولید لینک‌ها ----------
+  # تست صحت کانفیگ قبل از استارت
+  hysteria server -c /etc/hysteria/config.yaml --disable-update-check check >"$TTY" 2>&1 \
+    || warn "Hysteria2 config check reported issues (continuing)."
+  ok "Hysteria2 config written (QUIC tuned$([ "$WANT_WARP" = true ] && echo ' + WARP'))."
+}
 gen_links(){
   local port ip
-  # PORT_IPS فقط شامل پورت‌های معتبر Nginx است (اعتبارسنجی متقابل انجام شده)
+  # چند آدرس در ساب: هر IP در هر پورت یک لینک مستقل می‌سازد (افزونگی در برابر فیلتر)
   if $WANT_WS || $WANT_XHTTP; then
     for port in "${!PORT_IPS[@]}"; do
       IFS=',' read -ra _ips <<< "${PORT_IPS[$port]}"
       for ip in "${_ips[@]}"; do
         [ -z "$ip" ] && continue
-        if $WANT_WS; then
-          LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=${FP}&type=ws&host=${DOMAIN}&path=${WS_PATH}#${CONFIG_NAME}-WS-${ip}-${port}")
-        fi
-        if $WANT_XHTTP; then
-          LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=${FP}&type=xhttp&host=${DOMAIN}&path=${XHTTP_PATH}&mode=auto#${CONFIG_NAME}-XHTTP-${ip}-${port}")
-        fi
+        $WANT_WS && LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=${FP}&type=ws&host=${DOMAIN}&path=${WS_PATH}#${CONFIG_NAME}-WS-${ip}-${port}")
+        $WANT_XHTTP && LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=${FP}&type=xhttp&host=${DOMAIN}&path=${XHTTP_PATH}&mode=auto#${CONFIG_NAME}-XHTTP-${ip}-${port}")
       done
     done
   fi
 
-  if $WANT_REALITY; then
-    LINKS+=("vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=none&security=reality&sni=${SNI}&fp=${FP}&pbk=${REALITY_PUB}&sid=${REALITY_SID}&flow=xtls-rprx-vision&type=tcp#${CONFIG_NAME}-Reality")
-  fi
+  $WANT_REALITY && LINKS+=("vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=none&security=reality&sni=${SNI}&fp=${FP}&pbk=${REALITY_PUB}&sid=${REALITY_SID}&flow=xtls-rprx-vision&type=tcp#${CONFIG_NAME}-Reality")
 
   if $WANT_HY2; then
     local h_host h_sni h_ins
@@ -614,9 +760,9 @@ open_firewall(){
   if $USE_DOMAIN; then
     local p; for p in "${NGINX_PORTS[@]}"; do ufw allow "${p}/tcp" >/dev/null 2>&1 || true; done
   fi
-  $WANT_REALITY   && ufw allow "${REALITY_PORT}/tcp" >/dev/null 2>&1 || true
-  $WANT_HY2       && ufw allow "${HY2_PORT}/udp"     >/dev/null 2>&1 || true
-  [ "${HY2_CERT:-}" = "le" ] && ufw allow 80/tcp     >/dev/null 2>&1 || true
+  $WANT_REALITY && ufw allow "${REALITY_PORT}/tcp" >/dev/null 2>&1 || true
+  $WANT_HY2     && ufw allow "${HY2_PORT}/udp"     >/dev/null 2>&1 || true
+  [ "${HY2_CERT:-}" = "le" ] && ufw allow 80/tcp   >/dev/null 2>&1 || true
 }
 
 start_services(){
@@ -629,9 +775,17 @@ start_services(){
   if $WANT_HY2; then
     systemctl enable hysteria-server >/dev/null 2>&1 || true
     systemctl restart hysteria-server
-    sleep 1
-    systemctl is-active --quiet hysteria-server \
-      || warn "Hysteria2 service is not active. Check: journalctl -u hysteria-server -n 30"
+    sleep 2
+    if systemctl is-active --quiet hysteria-server; then
+      # تأیید گوش‌دادن روی UDP
+      if command -v ss >/dev/null 2>&1 && ss -lun 2>/dev/null | grep -q ":${HY2_PORT} "; then
+        ok "Hysteria2 is listening on UDP/${HY2_PORT}."
+      else
+        warn "Hysteria2 active but UDP/${HY2_PORT} not seen in ss. Check provider firewall."
+      fi
+    else
+      warn "Hysteria2 not active. Check: journalctl -u hysteria-server -n 40 --no-pager"
+    fi
   fi
   ok "Services started."
 }
@@ -639,15 +793,18 @@ start_services(){
 print_summary(){
   printf "\n${C2}================ DONE ================${C0}\n" >"$TTY"
   local l
-  for l in "${LINKS[@]}"; do
-    printf "%s\n\n" "$l" >"$TTY"
-  done
+  for l in "${LINKS[@]}"; do printf "%s\n\n" "$l" >"$TTY"; done
   if $USE_DOMAIN; then
     printf "${CG}Nginx ports:${C0} %s\n" "${NGINX_PORTS[*]}" >"$TTY"
     printf "${CG}Subscription URL:${C0}\n%s\n" "${SUB_URL}" >"$TTY"
-    printf "${C2}Note:${C0} Cloudflare SSL mode 'Full', domain proxied (orange),\n" >"$TTY"
-    printf "      and port one of 443/2053/2083/2087/2096/8443.\n" >"$TTY"
+    printf "${C2}Note:${C0} Cloudflare SSL 'Full', orange-cloud, port in 443/2053/2083/2087/2096/8443.\n" >"$TTY"
   fi
+  if $WANT_HY2; then
+    printf "${C2}HY2 tip:${C0} '-1 ping' is often just the client's TCP/ICMP test;\n" >"$TTY"
+    printf "         use 'Real Delay / Test URL'. If it truly fails, open UDP/${HY2_PORT}\n" >"$TTY"
+    printf "         in your CLOUD PROVIDER firewall (not just ufw).\n" >"$TTY"
+  fi
+  $WANT_WARP && printf "${CG}WARP:${C0} active for Google/OpenAI/Netflix/Spotify/Claude.\n" >"$TTY"
   printf "${C2}=====================================${C0}\n" >"$TTY"
 }
 
