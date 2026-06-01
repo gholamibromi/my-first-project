@@ -99,6 +99,51 @@ is_cf_port(){
   return 1
 }
 
+# ---------- تشخیص نصب قبلی + بکاپ + پاک‌سازی امن ----------
+preflight_check(){
+  local existing=false
+  [ -f /usr/local/etc/xray/config.json ] && existing=true
+  [ -f /etc/nginx/conf.d/xray.conf ]     && existing=true
+  [ -f /etc/hysteria/config.yaml ]       && existing=true
+  $existing || return 0
+
+  warn "An existing installation was detected on this server."
+  [ -f /usr/local/etc/xray/config.json ] && printf "    - /usr/local/etc/xray/config.json\n" >"$TTY"
+  [ -f /etc/nginx/conf.d/xray.conf ]     && printf "    - /etc/nginx/conf.d/xray.conf\n" >"$TTY"
+  [ -f /etc/hysteria/config.yaml ]       && printf "    - /etc/hysteria/config.yaml\n" >"$TTY"
+
+  printf "\n${C2}What do you want to do?${C0}\n" >"$TTY"
+  printf "  1) Backup old configs, then reinstall (old client links stop working)\n" >"$TTY"
+  printf "  2) Abort and keep everything as-is\n" >"$TTY"
+  ask_choice EX_CH "Choice" "2" 1 2
+  [ "$EX_CH" = "2" ] && { ok "Aborted. Nothing changed."; exit 0; }
+
+  backup_existing
+  cleanup_existing
+}
+
+backup_existing(){
+  local ts bdir
+  ts="$(date +%Y%m%d-%H%M%S)"; bdir="/root/vpn-backup-${ts}"
+  mkdir -p "$bdir"
+  cp -a /usr/local/etc/xray/config.json "$bdir/" 2>/dev/null || true
+  cp -a /etc/nginx/conf.d            "$bdir/nginx-conf.d" 2>/dev/null || true
+  cp -a /etc/hysteria/config.yaml    "$bdir/" 2>/dev/null || true
+  cp -a /var/www/sub                 "$bdir/sub" 2>/dev/null || true
+  ok "Old configs backed up to: ${bdir}"
+}
+
+cleanup_existing(){
+  systemctl stop xray            2>/dev/null || true
+  systemctl stop nginx           2>/dev/null || true
+  systemctl stop hysteria-server 2>/dev/null || true
+  # فقط فایل‌های ساخته‌ی همین اسکریپت؛ به بقیه‌ی Nginx دست نمی‌زنیم
+  rm -f /etc/nginx/conf.d/xray.conf 2>/dev/null || true
+  rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+  rm -f /var/www/sub/*.txt 2>/dev/null || true
+  ok "Old script-managed configs removed (backup kept)."
+}
+
 # ---------- ثابت‌ها ----------
 WS_INT=10001
 XHTTP_INT=10002
@@ -263,6 +308,9 @@ collect_inputs(){
       HY2_CERT="self"
     fi
   fi
+
+  printf "\n${C2}TLS fingerprint (uTLS):${C0} chrome / firefox / safari / randomized\n" >"$TTY"
+  ask_choice FP "Choice" "chrome" chrome firefox safari randomized
 
   if $WANT_REALITY; then
     ask_valid SNI "SNI/destination for Reality (a real website)" "$RE_DOMAIN" "www.microsoft.com"
@@ -529,17 +577,17 @@ gen_links(){
       for ip in "${_ips[@]}"; do
         [ -z "$ip" ] && continue
         if $WANT_WS; then
-          LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=chrome&type=ws&host=${DOMAIN}&path=${WS_PATH}#${CONFIG_NAME}-WS-${ip}-${port}")
+          LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=${FP}&type=ws&host=${DOMAIN}&path=${WS_PATH}#${CONFIG_NAME}-WS-${ip}-${port}")
         fi
         if $WANT_XHTTP; then
-          LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=chrome&type=xhttp&host=${DOMAIN}&path=${XHTTP_PATH}&mode=auto#${CONFIG_NAME}-XHTTP-${ip}-${port}")
+          LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=${FP}&type=xhttp&host=${DOMAIN}&path=${XHTTP_PATH}&mode=auto#${CONFIG_NAME}-XHTTP-${ip}-${port}")
         fi
       done
     done
   fi
 
   if $WANT_REALITY; then
-    LINKS+=("vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=none&security=reality&sni=${SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}&flow=xtls-rprx-vision&type=tcp#${CONFIG_NAME}-Reality")
+    LINKS+=("vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=none&security=reality&sni=${SNI}&fp=${FP}&pbk=${REALITY_PUB}&sid=${REALITY_SID}&flow=xtls-rprx-vision&type=tcp#${CONFIG_NAME}-Reality")
   fi
 
   if $WANT_HY2; then
@@ -604,6 +652,7 @@ print_summary(){
 }
 
 main(){
+  preflight_check
   menu_mode
   collect_inputs
   install_deps
