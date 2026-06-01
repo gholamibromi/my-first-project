@@ -32,7 +32,7 @@ welcome_screen() {
   printf "\n" >"$TTY"
   banner "  ╔══════════════════════════════════════════════════════════════════════════════╗"
   banner "  ║                        VPN Multi-Protocol Installer                          ║"
-  banner "  ║                              Author: gholam                                  ║"
+  banner "  ║                              Author: CR-VPN                                  ║"
   banner "  ║                  Supported: VLESS, Hysteria2, WARP, Nginx                    ║"
   banner "  ╚══════════════════════════════════════════════════════════════════════════════╝"
   printf "\n" >"$TTY"
@@ -256,6 +256,7 @@ backup_existing(){
 
 cleanup_existing(){
   local svc
+  killall -9 xray hysteria hysteria-server 2>/dev/null || true
   for svc in xray nginx hysteria-server hysteria warp-svc; do
     systemctl stop    "$svc" 2>/dev/null || true
     systemctl disable "$svc" 2>/dev/null || true
@@ -471,10 +472,10 @@ install_deps(){
       ;;
   esac
 
-  if ! command -v xray >/dev/null 2>&1; then
+  if ! command -v xray >/dev/null 2>&1 || [ ! -f /etc/systemd/system/xray.service ]; then
     bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
   fi
-  if $WANT_HY2 && ! command -v hysteria >/dev/null 2>&1; then
+  if $WANT_HY2 && { ! command -v hysteria >/dev/null 2>&1 || [ ! -f /etc/systemd/system/hysteria-server.service ]; }; then
     bash <(curl -fsSL https://get.hy2.sh/)
   fi
   $WANT_WARP && install_warp
@@ -1145,9 +1146,11 @@ full_removal(){
     systemctl disable xray hysteria-server hysteria warp-svc nginx 2>/dev/null || true
     
     info "Deleting files..."
+    killall -9 xray hysteria hysteria-server 2>/dev/null || true
     rm -rf /usr/local/etc/xray /etc/hysteria /etc/vpn-installer /var/www/sub /etc/ssl/xray
     rm -f /etc/nginx/conf.d/xray.conf
     rm -f /etc/systemd/system/xray.service /etc/systemd/system/hysteria*
+    rm -f /usr/local/bin/xray /usr/local/bin/hysteria
     rm -rf /root/vpn-backup-*
     
     if command -v warp-cli >/dev/null 2>&1; then
