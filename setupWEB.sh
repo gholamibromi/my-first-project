@@ -268,10 +268,6 @@ cat << 'EOF' > /opt/cr-vpn/templates/index.html
                         <div><p class="font-bold">Hysteria2</p><p class="text-sm text-gray-400">High-speed UDP protocol</p></div>
                         <input type="checkbox" v-model="s.WANT_HY2" class="w-6 h-6 rounded text-purple-500">
                     </div>
-                    <div class="flex items-center justify-between">
-                        <div><p class="font-bold">WARP Outbound</p><p class="text-sm text-gray-400">Route blocked sites (Google, OpenAI) via Cloudflare</p></div>
-                        <input type="checkbox" v-model="s.WANT_WARP" class="w-6 h-6 rounded text-purple-500">
-                    </div>
                 </div>
 
                 <div v-show="tab === 'net'" class="space-y-6">
@@ -312,8 +308,20 @@ cat << 'EOF' > /opt/cr-vpn/templates/index.html
                             <input type="text" v-model="s.SNI" class="w-full input-dark rounded-lg px-4 py-2">
                         </div>
                         <div>
+                            <label class="block text-sm font-medium mb-2">Extra SNIs (Comma separated)</label>
+                            <input type="text" v-model="s.REALITY_SNIS" class="w-full input-dark rounded-lg px-4 py-2" placeholder="yahoo.com, apple.com">
+                        </div>
+                        <div>
                             <label class="block text-sm font-medium mb-2">ALPN Override</label>
-                            <input type="text" v-model="s.ALPN" class="w-full input-dark rounded-lg px-4 py-2" placeholder="h2,http/1.1">
+                            <select v-model="s.ALPN" class="w-full input-dark rounded-lg px-4 py-2">
+                                <option value="h2,http/1.1">h2,http/1.1</option>
+                                <option value="h3,h2,http/1.1">h3,h2,http/1.1</option>
+                                <option value="h3,h2">h3,h2</option>
+                                <option value="h3,http/1.1">h3,http/1.1</option>
+                                <option value="h3">h3</option>
+                                <option value="h2">h2</option>
+                                <option value="http/1.1">http/1.1</option>
+                            </select>
                         </div>
                         <div>
                             <label class="block text-sm font-medium mb-2">TLS Minimum</label>
@@ -325,6 +333,10 @@ cat << 'EOF' > /opt/cr-vpn/templates/index.html
                         </div>
                     </div>
                     <div class="flex items-center justify-between mt-6">
+                        <div><p class="font-bold">WARP Outbound</p><p class="text-sm text-gray-400">Route blocked sites (Google, OpenAI) via Cloudflare to prevent Google 403 blocks</p></div>
+                        <input type="checkbox" v-model="s.WANT_WARP" class="w-6 h-6 rounded text-purple-500">
+                    </div>
+                    <div class="flex items-center justify-between mt-4">
                         <div><p class="font-bold">Block QUIC Outbound</p><p class="text-sm text-gray-400">Drops UDP/443 to force clients onto TCP (Bypass ISP throttling)</p></div>
                         <input type="checkbox" v-model="s.BLOCK_QUIC" class="w-6 h-6 rounded text-purple-500">
                     </div>
@@ -335,6 +347,18 @@ cat << 'EOF' > /opt/cr-vpn/templates/index.html
                     <div class="flex items-center justify-between mt-4">
                         <div><p class="font-bold">Enable Fragment</p><p class="text-sm text-gray-400">Bypass SNI filtering</p></div>
                         <input type="checkbox" v-model="s.FRAGMENT" class="w-6 h-6 rounded text-purple-500">
+                    </div>
+
+                    <div class="mt-8 border-t border-white/10 pt-6">
+                        <h3 class="text-xl font-bold mb-4">Clean IPs / External Proxies</h3>
+                        <p class="text-sm text-gray-400 mb-4">Assign external IP addresses (e.g. Cloudflare IP) for each Nginx port. This is automatically applied to your subscription links.</p>
+                        <div class="space-y-4">
+                            <div v-for="port in nginxPortsList" :key="port" class="flex items-center gap-4">
+                                <span class="bg-black/30 px-4 py-2 rounded-lg font-bold text-purple-400 w-24 text-center">Port {{ port }}</span>
+                                <input type="text" v-model="s['PORT_IPS_' + port]" class="flex-1 input-dark rounded-lg px-4 py-2" placeholder="e.g. 104.17.3.2">
+                            </div>
+                            <div v-if="nginxPortsList.length === 0" class="text-gray-500 italic">No valid Nginx ports defined in the Network tab.</div>
+                        </div>
                     </div>
                 </div>
 
@@ -359,6 +383,12 @@ cat << 'EOF' > /opt/cr-vpn/templates/index.html
                     stats: { cpu: 0, mem: 0, network: { rx: '0', tx: '0' } },
                     saving: false,
                     toast: { show: false, msg: '' }
+                }
+            },
+            computed: {
+                nginxPortsList() {
+                    if (!this.s.NGINX_PORTS) return [];
+                    return this.s.NGINX_PORTS.split(' ').filter(p => p.trim() !== '');
                 }
             },
             mounted() {
