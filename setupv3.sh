@@ -32,7 +32,7 @@ welcome_screen() {
   printf "\n" >"$TTY"
   banner "  ╔══════════════════════════════════════════════════════════════════════════════╗"
   banner "  ║                        VPN Multi-Protocol Installer                          ║"
-  banner "  ║                              Author: CR-VPpppN                                  ║"
+  banner "  ║                              Author: CR-VPN                                  ║"
   banner "  ║                  Supported: VLESS, Hysteria2, WARP, Nginx                    ║"
   banner "  ╚══════════════════════════════════════════════════════════════════════════════╝"
   printf "\n" >"$TTY"
@@ -445,13 +445,21 @@ install_warp(){
         ;;
     esac
   fi
-  # ثبت و اتصال WARP در حالت proxy روی 127.0.0.1:40000
-  warp-cli --accept-tos registration new 2>/dev/null \
-    || warp-cli --accept-tos register 2>/dev/null || true
-  warp-cli --accept-tos mode proxy 2>/dev/null \
-    || warp-cli set-mode proxy 2>/dev/null || true
-  warp-cli --accept-tos connect 2>/dev/null \
-    || warp-cli connect 2>/dev/null || true
+  warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos register 2>/dev/null || true
+  
+  local m_ok=false
+  warp-cli --accept-tos mode proxy 2>/dev/null && m_ok=true
+  if ! $m_ok; then warp-cli set-mode proxy 2>/dev/null && m_ok=true; fi
+  if ! $m_ok; then warp-cli mode proxy 2>/dev/null && m_ok=true; fi
+  
+  if ! $m_ok; then
+    warn "Failed to set WARP to Proxy mode! Disabling WARP to prevent server lockout."
+    WANT_WARP=false
+    return 0
+  fi
+  
+  warp-cli --accept-tos proxy port "$WARP_PORT" 2>/dev/null || warp-cli set-proxy-port "$WARP_PORT" 2>/dev/null || true
+  warp-cli --accept-tos connect 2>/dev/null || warp-cli connect 2>/dev/null || true
   sleep 3
   if warp-cli status 2>/dev/null | grep -qi connected; then
     ok "WARP connected (SOCKS5 on 127.0.0.1:${WARP_PORT})."
@@ -854,11 +862,16 @@ write_hysteria(){
   local cert_path="" key_path=""
   if [ "${HY2_CERT:-}" = "le" ]; then
     systemctl stop nginx 2>/dev/null || true
-    certbot certonly --standalone -d "$HY2_DOMAIN" \
-      --non-interactive --agree-tos -m "$LE_EMAIL" || die "Let's Encrypt failed."
-    cert_path="/etc/letsencrypt/live/${HY2_DOMAIN}/fullchain.pem"
-    key_path="/etc/letsencrypt/live/${HY2_DOMAIN}/privkey.pem"
-  else
+    if certbot certonly --standalone -d "$HY2_DOMAIN" --non-interactive --agree-tos -m "$LE_EMAIL"; then
+      cert_path="/etc/letsencrypt/live/${HY2_DOMAIN}/fullchain.pem"
+      key_path="/etc/letsencrypt/live/${HY2_DOMAIN}/privkey.pem"
+    else
+      warn "Let's Encrypt failed! (Port 80 blocked or domain not resolving). Falling back to Self-Signed."
+      HY2_CERT="self"
+    fi
+  fi
+  
+  if [ "${HY2_CERT:-}" = "self" ]; then
     openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
       -keyout /etc/hysteria/key.pem -out /etc/hysteria/cert.pem \
       -days 3650 -subj "/CN=${HY2_SNI}" >/dev/null 2>&1
@@ -1025,9 +1038,13 @@ print_summary(){
   if $WANT_HY2; then
     printf "${C2}HY2 tip:${C0} '-1 ping' is often just the client's TCP/ICMP test;\n" >"$TTY"
     printf "         use 'Real Delay / Test URL'. If it truly fails, open UDP/${HY2_PORT}\n" >"$TTY"
-    printf "         in your CLOUD PROVIDER firewall (not just ufw).\n" >"$TTY"
   fi
   $WANT_WARP && printf "${CG}WARP:${C0} active for Google/OpenAI/Netflix/Spotify/Claude.\n" >"$TTY"
+  printf "\n${CR}>>> CRITICAL <<<${C0}\n" >"$TTY"
+  printf "Ensure the following ports are OPEN in your Cloud Provider's Panel (AWS, DigitalOcean, etc.):\n" >"$TTY"
+  $USE_DOMAIN && printf " - Nginx: ${NGINX_PORTS[*]:-} (TCP)\n" >"$TTY"
+  $WANT_REALITY && printf " - Reality: ${REALITY_PORT} (TCP)\n" >"$TTY"
+  $WANT_HY2 && printf " - Hysteria2: ${HY2_PORT} (UDP)\n" >"$TTY"
   printf "${C2}=====================================${C0}\n" >"$TTY"
 }
 
