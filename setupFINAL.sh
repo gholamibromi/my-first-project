@@ -1566,8 +1566,16 @@ import_config(){
   fi
 
   save_state
-  ok "Configuration Imported successfully!"
-  printf "Do you want to rebuild the server now with these settings? (y/n)\n" >"$TTY"
+  ok "Configuration unpacked successfully!"
+  
+  printf "\n${C3}Please confirm your domains for this new server:${C0}\n" >"$TTY"
+  ask_valid DOMAIN "Confirm Main Domain (for WS/XHTTP/Reality)" "$RE_DOMAIN" "${DOMAIN:-}"
+  if $WANT_HY2; then
+    ask HY2_DOMAIN "Confirm HY2 Domain" "${HY2_DOMAIN:-$DOMAIN}"
+  fi
+  save_state
+  
+  printf "\nDo you want to run the full installation and build the server now? (y/n)\n" >"$TTY"
   local ans=""
   ask ans ">" "y"
   if [ "$ans" = "y" ]; then
