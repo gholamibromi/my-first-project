@@ -23,7 +23,7 @@ warn()  { printf "${CW}  ⚠  ${C0}%s\n"        "$*" >"$TTY"; }
 die()   { printf "${CR}  ✖  ${C0}%s\n"        "$*" >"$TTY"; exit 1; }
 info()  { printf "${C3}  ·  ${C0}%s\n"        "$*" >"$TTY"; }
 step()  { printf "\n${CB}${C2}  ▶  %s${C0}\n" "$*" >"$TTY"; }
-banner(){ printf "${C2}%s${C0}\n""$*" >"$TTY"; }
+banner(){ printf "${C2}%s${C0}\n" "$*" >"$TTY"; }
 
 # ── ثابت‌ها ──────────────────────────────────────────────────────
 MAX_TRIES=3
@@ -269,7 +269,7 @@ backup_existing(){
   bdir="/root/vpn-backup-${ts}"
   mkdir -p "$bdir"
 
-  cp -a /usr/local/etc/xray/config.json "$bdir/"2>/dev/null || true
+  cp -a /usr/local/etc/xray/config.json "$bdir/" 2>/dev/null || true
   cp -a /etc/nginx/conf.d               "$bdir/nginx-conf.d" 2>/dev/null || true
   cp -a /etc/hysteria/config.yaml       "$bdir/"          2>/dev/null || true
   cp -a /var/www/sub                    "$bdir/sub"        2>/dev/null || true
@@ -318,7 +318,8 @@ cleanup_existing(){
   # ── حذف WARP ─────────────────────────────────────────────────
   if command -v warp-cli >/dev/null 2>&1; then
     warp-cli disconnect 2>/dev/null || true
-    warp-cli registration delete 2>/dev/null || truefi
+    warp-cli registration delete 2>/dev/null || true
+  fi
   rm -f /etc/apt/sources.list.d/cloudflare-client.list 2>/dev/null || true
   rm -f /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg 2>/dev/null || true
 
