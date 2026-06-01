@@ -16,6 +16,7 @@ die(){  printf "${CR}[err]${C0} %s\n"  "$*" >"$TTY"; exit 1; }
 info()  { printf "  ·  %s\n" "$*" >"$TTY"; }
 banner(){ printf "${C2}%s${C0}\n" "$*" >"$TTY"; }
 press_enter() {
+  if [ "${HEADLESS:-false}" = "true" ]; then return 0; fi
   printf "\nPress Enter to continue..." >"$TTY"
   read -r <"$TTY" || true
 }
@@ -32,10 +33,10 @@ welcome_screen() {
   printf "\n" >"$TTY"
   banner "  ╔══════════════════════════════════════════════════════════════════════════════╗"
   banner "  ║                        VPN Multi-Protocol Installer                          ║"
-  banner "  ║                              Author: *MOJA*                                  ║"
+  banner "  ║                              Author: MOJA                                  ║"
   banner "  ║                  Supported: VLESS, Hysteria2, WARP, Nginx                    ║"
   banner "  ╚══════════════════════════════════════════════════════════════════════════════╝"
-  printf "\n" >"$TTY"
+  printf "  ${CR}⚠️ هشدار آموزشی: این پروژه صرفاً جهت مقاصد تحصیلی، تحقیقاتی و دور زدن تحریم‌های ناعادلانه توسعه یافته است.${C0}\n\n" >"$TTY"
 }
 
 MAX_TRIES=3
@@ -1241,7 +1242,7 @@ gen_subscription(){
     ${html_configs}
   </div>
   
-  <div class="footer">Created by CR-VPN | Generated: $(date "+%Y-%m-%d %H:%M")</div>
+  <div class="footer">Created by MOJA | Generated: $(date "+%Y-%m-%d %H:%M")</div>
 </div>
 </body>
 </html>
@@ -1526,7 +1527,7 @@ WANT_WARP=$WANT_WARP"
   local b64
   b64=$(printf "%s" "$txt" | base64 -w0)
   printf "\n${C2}Copy the following string completely:${C0}\n\n" >"$TTY"
-  printf "${CC}CR-VPN://%s${C0}\n\n" "$b64" >"$TTY"
+  printf "${CC}MOJA://%s${C0}\n\n" "$b64" >"$TTY"
   press_enter
 }
 
@@ -1535,15 +1536,15 @@ import_config(){
   banner "  ╔══════════════════════════════════════════╗"
   banner "  ║            Import Configuration          ║"
   banner "  ╚══════════════════════════════════════════╝"
-  printf "  ${C3}Paste your CR-VPN:// string below:${C0}\n" >"$TTY"
+  printf "  ${C3}Paste your MOJA:// string below:${C0}\n" >"$TTY"
   local str=""
   ask str "> " ""
-  if [[ "$str" != CR-VPN://* ]]; then
-    warn "Invalid format! Must start with CR-VPN://"
+  if [[ "$str" != MOJA://* ]]; then
+    warn "Invalid format! Must start with MOJA://"
     press_enter
     return
   fi
-  local b64="${str#CR-VPN://}"
+  local b64="${str#MOJA://}"
   local txt
   txt=$(printf "%s" "$b64" | base64 -d 2>/dev/null || true)
   if ! echo "$txt" | grep -q "DOMAIN"; then
@@ -1603,6 +1604,12 @@ main_menu(){
 }
 
 main(){
+  if [ "${1:-}" = "--headless" ]; then
+    export HEADLESS=true
+    load_state || true
+    execute_build
+    exit 0
+  fi
   main_menu
 }
 
