@@ -33,7 +33,7 @@ welcome_screen() {
   printf "\n" >"$TTY"
   banner "  ╔══════════════════════════════════════════════════════════════════════════════╗"
   banner "  ║                        VPN Multi-Protocol Installer                          ║"
-  banner "  ║                               Author: MOJA                                   ║"
+  banner "  ║                              Author: *MOJA*                                  ║"
   banner "  ║                  Supported: VLESS, Hysteria2, WARP, Nginx                    ║"
   banner "  ╚══════════════════════════════════════════════════════════════════════════════╝"
   printf "  ${CR}⚠️ هشدار آموزشی: این پروژه صرفاً جهت مقاصد تحصیلی، تحقیقاتی و دور زدن تحریم‌های ناعادلانه توسعه یافته است.${C0}\n\n" >"$TTY"
@@ -440,7 +440,10 @@ adv_network(){
     printf "  ${C2}5)${C0} Fingerprint   : ${CC}%s${C0}\n" "${FP:-}" >"$TTY"
     printf "  ${C2}6)${C0} Reality Port  : ${CC}%s${C0}\n" "${REALITY_PORT:-}" >"$TTY"
     printf "  ${C2}7)${C0} HY2 Port      : ${CC}%s${C0}\n" "${HY2_PORT:-}" >"$TTY"
-    printf "  ${C2}8)${C0} External Proxy IPs (For Sub)\n" >"$TTY"
+    if $WANT_HY2; then
+      printf "  ${C2}8)${C0} HY2 Cert Type : ${CC}%s${C0}\n" "${HY2_CERT:-[Not Set]}" >"$TTY"
+    fi
+    printf "  ${C2}9)${C0} External Proxy IPs (For Sub)\n" >"$TTY"
     printf "\n  ${CR}0) Back${C0}\n\n" >"$TTY"
     local opt=""
     ask opt "Select an option" ""
@@ -452,7 +455,19 @@ adv_network(){
       5) menu_fingerprint ;;
       6) ask_port REALITY_PORT "Reality Port" "${REALITY_PORT:-}" ;;
       7) ask_port HY2_PORT "HY2 Port" "${HY2_PORT:-}" ;;
-      8) collect_external_proxies ;;
+      8) 
+        if $WANT_HY2; then
+          ask_choice HY2_CERT "Hysteria2 SSL Type (self/le)" "${HY2_CERT:-self}" "self" "le"
+          if [ "$HY2_CERT" = "le" ]; then
+            ask_valid HY2_DOMAIN "Hysteria2 Domain (must point to this server)" "$RE_DOMAIN" "${HY2_DOMAIN:-$DOMAIN}"
+            ask_valid LE_EMAIL "Let's Encrypt Email" "$RE_EMAIL" "${LE_EMAIL:-}"
+          fi
+        else
+          warn "Hysteria2 is disabled."
+          press_enter
+        fi
+        ;;
+      9) collect_external_proxies ;;
       0) return ;;
     esac
   done
@@ -1051,6 +1066,11 @@ write_hysteria(){
   $WANT_HY2 || return 0
   mkdir -p /etc/hysteria
 
+  # Fallback for empty HY2_CERT (e.g. imported from old backup)
+  if [ -z "${HY2_CERT:-}" ]; then
+    HY2_CERT="self"
+  fi
+
   local cert_path="" key_path=""
   if [ "${HY2_CERT:-}" = "le" ]; then
     systemctl stop nginx 2>/dev/null || true
@@ -1517,7 +1537,10 @@ WANT_WS=$WANT_WS
 WANT_XHTTP=$WANT_XHTTP
 WANT_REALITY=$WANT_REALITY
 WANT_HY2=$WANT_HY2
-WANT_WARP=$WANT_WARP"
+WANT_WARP=$WANT_WARP
+HY2_CERT=\"$HY2_CERT\"
+HY2_DOMAIN=\"$HY2_DOMAIN\"
+LE_EMAIL=\"$LE_EMAIL\""
 
   local p
   for p in "${NGINX_PORTS[@]:-}"; do
