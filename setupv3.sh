@@ -32,7 +32,7 @@ welcome_screen() {
   printf "\n" >"$TTY"
   banner "  ╔══════════════════════════════════════════════════════════════════════════════╗"
   banner "  ║                        VPN Multi-Protocol Installer                          ║"
-  banner "  ║                                Author: MOJA                                  ║"
+  banner "  ║                              Author: *MOJA*                                  ║"
   banner "  ║                  Supported: VLESS, Hysteria2, WARP, Nginx                    ║"
   banner "  ╚══════════════════════════════════════════════════════════════════════════════╝"
   printf "\n" >"$TTY"
@@ -77,7 +77,8 @@ SERVER_IP=""
 UUID=""; WS_PATH=""; XHTTP_PATH=""; HY2_PASS=""
 REALITY_PRIV=""; REALITY_PUB=""; REALITY_SID=""
 
-TLS_VER="1.2"
+TLS_MIN="1.2"
+TLS_MAX="1.3"
 ALPN="h2,http/1.1"
 BLOCK_QUIC=false
 IP_PREF="auto"
@@ -123,7 +124,8 @@ REALITY_PRIV="${REALITY_PRIV:-}"
 REALITY_PUB="${REALITY_PUB:-}"
 REALITY_SID="${REALITY_SID:-}"
 SERVER_IP="${SERVER_IP:-}"
-TLS_VER="${TLS_VER:-1.2}"
+TLS_MIN="${TLS_MIN:-1.2}"
+TLS_MAX="${TLS_MAX:-1.3}"
 ALPN="${ALPN:-h2,http/1.1}"
 BLOCK_QUIC=$BLOCK_QUIC
 IP_PREF="${IP_PREF:-auto}"
@@ -493,7 +495,7 @@ adv_tls(){
     banner "  ╚══════════════════════════════════════════╝"
     printf "  ${C2}1)${C0} Reality Primary SNI : ${CC}%s${C0}\n" "${SNI:-[Not Set]}" >"$TTY"
     printf "  ${C2}2)${C0} Reality Extra SNIs  : ${CC}%s${C0}\n" "${REALITY_SNIS:-[None]}" >"$TTY"
-    printf "  ${C2}3)${C0} Nginx TLS Version   : ${CC}%s${C0}\n" "${TLS_VER:-1.2}" >"$TTY"
+    printf "  ${C2}3)${C0} Nginx TLS Range     : ${CC}%s to %s${C0}\n" "${TLS_MIN:-1.2}" "${TLS_MAX:-1.3}" >"$TTY"
     printf "  ${C2}4)${C0} ALPN Override       : ${CC}%s${C0}\n" "${ALPN:-}" >"$TTY"
     printf "  ${C2}5)${C0} Mux (Clientside)    : ${CG}%s${C0}\n" "$($MUX && echo ON || echo OFF)" >"$TTY"
     printf "  ${C2}6)${C0} Fragment (Clients)  : ${CG}%s${C0}\n" "$($FRAGMENT && echo ON || echo OFF)" >"$TTY"
@@ -503,8 +505,25 @@ adv_tls(){
     case "${opt:-}" in
       1) ask_valid SNI "Primary SNI" "$RE_DOMAIN" "${SNI:-}" ;;
       2) ask REALITY_SNIS "Extra SNIs (comma-separated, e.g. www.yahoo.com,apple.com)" "${REALITY_SNIS:-}" ;;
-      3) ask_choice TLS_VER "TLS Version (1.2 or 1.3)" "1.2" "1.2" "1.3" ;;
-      4) ask_choice ALPN "ALPN" "h2,http/1.1" "h2,http/1.1" "h2" "http/1.1" ;;
+      3) 
+        ask_choice TLS_MIN "TLS Minimum (1.0/1.1/1.2/1.3)" "1.2" "1.0" "1.1" "1.2" "1.3"
+        ask_choice TLS_MAX "TLS Maximum (1.0/1.1/1.2/1.3)" "1.3" "1.0" "1.1" "1.2" "1.3"
+        ;;
+      4) 
+        printf "\n  ${C3}Select ALPN:${C0}\n" >"$TTY"
+        printf "  1) h2,http/1.1\n  2) h3,h2,http/1.1\n  3) h3,h2\n  4) h3,http/1.1\n  5) h3\n  6) h2\n  7) http/1.1\n" >"$TTY"
+        local a_opt=""
+        ask_choice a_opt "Choice" "1" 1 2 3 4 5 6 7
+        case "$a_opt" in
+          1) ALPN="h2,http/1.1" ;;
+          2) ALPN="h3,h2,http/1.1" ;;
+          3) ALPN="h3,h2" ;;
+          4) ALPN="h3,http/1.1" ;;
+          5) ALPN="h3" ;;
+          6) ALPN="h2" ;;
+          7) ALPN="http/1.1" ;;
+        esac
+        ;;
       5) $MUX && MUX=false || MUX=true ;;
       6) $FRAGMENT && FRAGMENT=false || FRAGMENT=true ;;
       0) return ;;
@@ -976,8 +995,21 @@ EOF
 )
   fi
 
-  local tls_str="TLSv1.2 TLSv1.3"
-  [ "${TLS_VER:-1.2}" = "1.3" ] && tls_str="TLSv1.3"
+  local protos=()
+  local all_p=("1.0" "1.1" "1.2" "1.3")
+  local in_range=false p_ver
+  for p_ver in "${all_p[@]}"; do
+    if [ "$p_ver" = "${TLS_MIN:-1.2}" ]; then in_range=true; fi
+    if $in_range; then
+      [ "$p_ver" = "1.0" ] && protos+=("TLSv1")
+      [ "$p_ver" = "1.1" ] && protos+=("TLSv1.1")
+      [ "$p_ver" = "1.2" ] && protos+=("TLSv1.2")
+      [ "$p_ver" = "1.3" ] && protos+=("TLSv1.3")
+    fi
+    if [ "$p_ver" = "${TLS_MAX:-1.3}" ]; then break; fi
+  done
+  [ ${#protos[@]} -eq 0 ] && protos=("TLSv1.2" "TLSv1.3")
+  local tls_str="${protos[*]}"
 
   cat > /etc/nginx/conf.d/xray.conf <<EOF
 server {
@@ -992,7 +1024,7 @@ ${xh_block}
 
     location = /sub/${SUB_TOKEN} {
         if (\$http_user_agent ~* "mozilla|chrome|safari|edge|applewebkit") {
-            rewrite ^ /sub/${SUB_TOKEN}_html break;
+            rewrite ^ /sub/${SUB_TOKEN}_html last;
         }
         default_type text/plain;
         alias /var/www/sub/${SUB_TOKEN}.txt;
@@ -1473,7 +1505,8 @@ XHTTP_PATH=\"$XHTTP_PATH\"
 SNI=\"$SNI\"
 REALITY_SNIS=\"$REALITY_SNIS\"
 CONFIG_NAME=\"$CONFIG_NAME\"
-TLS_VER=\"$TLS_VER\"
+TLS_MIN=\"$TLS_MIN\"
+TLS_MAX=\"$TLS_MAX\"
 ALPN=\"$ALPN\"
 BLOCK_QUIC=$BLOCK_QUIC
 IP_PREF=\"$IP_PREF\"
