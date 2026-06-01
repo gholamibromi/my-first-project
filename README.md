@@ -1,6 +1,3 @@
-# my-first-project
-just for fun :)
-
 <div align="center">
   <h1>🚀 پنل پیشرفته CR-VPN</h1>
   <p><strong>کامل‌ترین و هوشمندترین ابزار ساخت VPN ضد فیلتر شخصی</strong></p>
@@ -35,7 +32,7 @@ just for fun :)
 ۱. با استفاده از SSH به سرور متصل بشید.
 ۲. دستور زیر رو کپی و اجرا کنید:
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/YourUsername/YourRepo/main/setupweb.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/gholamibromi/my-first-project/refs/heads/main/setupWEB.sh)
 ```
 ۳. اسکریپت از شما **پورت پنل**، **نام کاربری** و **رمز عبور** می‌خواد. اون‌ها رو وارد کنید.
 ۴. تمام! حالا آدرس `http://IP_Server:Port` رو تو مرورگر خودتون باز کنید، لاگین کنید و با موس کانفیگ‌هاتون رو بسازید!
@@ -47,7 +44,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/YourUsername/YourRepo/main/s
 اگر دوست دارید همه‌چیز رو از همون محیط سیاه ترمینال مدیریت کنید:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/YourUsername/YourRepo/main/setupV2.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/gholamibromi/my-first-project/refs/heads/main/setupFINAL.sh)
 ```
 بعد از اجرا، عدد `1` (New Installation) رو انتخاب کنید. سپس گزینه‌ی `Advanced Panel` رو بزنید تا به تمام تنظیمات حرفه‌ای دسترسی داشته باشید.
 
