@@ -2,10 +2,10 @@
 # نصب چندپروتکلی: VLESS-WS / VLESS-XHTTP / VLESS-Reality / Hysteria2
 # + Sniffing + WARP outbound + Routing + Multi-address subscription
 # UI انگلیسی، کامنت‌ها فارسی. ورودی از /dev/tty خوانده می‌شود.
-set -uo pipefail # Removed -e to prevent abrupt exits during menu navigation
+set -uo pipefail
 
 # ---------- رنگ‌ها و TTY ----------
-C0=$'\033[0m'; C1=$'\033[36m'; C2=$'\033[1;33m'; CR=$'\033[31m'; CG=$'\033[32m'
+C0=$'\033[0m'; C1=$'\033[36m'; C2=$'\033[1;33m'; C3=$'\033[1;35m'; CR=$'\033[31m'; CG=$'\033[32m'
 CC=$'\033[38;5;51m'
 TTY=/dev/tty
 
@@ -32,7 +32,7 @@ welcome_screen() {
   printf "\n" >"$TTY"
   banner "  ╔══════════════════════════════════════════════════════════════════════════════╗"
   banner "  ║                        VPN Multi-Protocol Installer                          ║"
-  banner "  ║                              Author: CR-VPN                                  ║"
+  banner "  ║                              Author: gholam                                  ║"
   banner "  ║                  Supported: VLESS, Hysteria2, WARP, Nginx                    ║"
   banner "  ╚══════════════════════════════════════════════════════════════════════════════╝"
   printf "\n" >"$TTY"
@@ -153,7 +153,7 @@ ask_yesno(){
   local __var="$1" __prompt="$2" __default="${3:-}" __ans="" __try=0
   while [ "$__try" -lt "$MAX_TRIES" ]; do
     ask "$__var" "$__prompt (y/n)" "$__default"
-    __ans="${!__var}"; __ans="${__ans,,}"
+    __ans="${!__var:-}"; __ans="${__ans,,}"
     case "$__ans" in
       y|yes) printf -v "$__var" 'y'; return 0 ;;
       n|no)  printf -v "$__var" 'n'; return 0 ;;
@@ -169,7 +169,7 @@ ask_choice(){
   local __valid=("$@") __ans="" v __try=0
   while [ "$__try" -lt "$MAX_TRIES" ]; do
     ask "$__var" "$__prompt" "$__default"
-    __ans="${!__var}"
+    __ans="${!__var:-}"
     for v in "${__valid[@]}"; do
       [ "$__ans" = "$v" ] && return 0
     done
@@ -183,7 +183,7 @@ ask_valid(){
   local __var="$1" __prompt="$2" __regex="$3" __default="${4:-}" __ans="" __try=0
   while [ "$__try" -lt "$MAX_TRIES" ]; do
     ask "$__var" "$__prompt" "$__default"
-    __ans="${!__var}"
+    __ans="${!__var:-}"
     if [ -n "$__ans" ] && [[ "$__ans" =~ $__regex ]]; then
       return 0
     fi
@@ -197,7 +197,7 @@ ask_port(){
   local __var="$1" __prompt="$2" __default="${3:-}" __ans="" __try=0
   while [ "$__try" -lt "$MAX_TRIES" ]; do
     ask "$__var" "$__prompt" "$__default"
-    __ans="${!__var}"
+    __ans="${!__var:-}"
     if [[ "$__ans" =~ ^[0-9]+$ ]] && [ "$__ans" -ge 1 ] && [ "$__ans" -le 65535 ]; then
       return 0
     fi
@@ -230,9 +230,9 @@ preflight_check(){
   printf "  1) Backup + deep-clean old install, then reinstall (old links stop working)\n" >"$TTY"
   printf "  2) Abort and keep everything as-is\n" >"$TTY"
   ask_choice EX_CH "Choice" "2" 1 2
-  [ "$EX_CH" = "2" ] && { ok "Aborted. Nothing changed."; return 1; }
+  [ "${EX_CH:-}" = "2" ] && { ok "Aborted. Nothing changed."; return 1; }
 
-  local bname
+  local bname=""
   ask bname "Enter backup name (leave empty for auto-generated)" ""
   backup_existing "$bname"
   cleanup_existing
@@ -304,10 +304,10 @@ new_install_menu(){
   printf "  ${C2}3)${C0} Advanced Manual   ${C3}(Dynamic menu for all settings)${C0}\n" >"$TTY"
   printf "  ${C2}0)${C0} Cancel\n\n" >"$TTY"
   
-  local mode
+  local mode=""
   ask_choice mode "Select Mode" "1" 1 2 3 0
   
-  case "$mode" in
+  case "${mode:-}" in
     1) mode_fast ;;
     2) mode_simple ;;
     3) mode_advanced ;;
@@ -326,7 +326,7 @@ mode_fast(){
   ask SUB_PATH_IN "Enter Subscription path segment" "sub"
   ask CONFIG_NAME "Enter VPN Config Name" "FastVPN"
   CONFIG_NAME="${CONFIG_NAME// /_}"
-  if [ -n "$SUB_PATH_IN" ]; then
+  if [ -n "${SUB_PATH_IN:-}" ]; then
     SUB_TOKEN="$SUB_PATH_IN"
   else
     SUB_TOKEN="$(openssl rand -hex 16)"
@@ -360,35 +360,35 @@ mode_advanced(){
     printf "\n  ${C3}General Info:${C0}\n" >"$TTY"
     printf "  ${C2}6)${C0} Domain        : ${CC}%s${C0}\n" "${DOMAIN:-[Not Set]}" >"$TTY"
     printf "  ${C2}7)${C0} Nginx Ports   : ${CC}%s${C0}\n" "${NGINX_PORTS[*]:-[Not Set]}" >"$TTY"
-    printf "  ${C2}8)${C0} Config Name   : ${CC}%s${C0}\n" "${CONFIG_NAME}" >"$TTY"
-    printf "  ${C2}9)${C0} Sub Path      : ${CC}%s${C0}\n" "${SUB_PATH_IN}" >"$TTY"
+    printf "  ${C2}8)${C0} Config Name   : ${CC}%s${C0}\n" "${CONFIG_NAME:-}" >"$TTY"
+    printf "  ${C2}9)${C0} Sub Path      : ${CC}%s${C0}\n" "${SUB_PATH_IN:-}" >"$TTY"
     
     printf "\n  ${CG}0) Start Build${C0}\n" >"$TTY"
     printf "  ${CR}99) Cancel${C0}\n" >"$TTY"
     
-    local opt
+    local opt=""
     ask opt "Select an option" ""
-    case "$opt" in
+    case "${opt:-}" in
       1) $WANT_WS && WANT_WS=false || WANT_WS=true ;;
       2) $WANT_XHTTP && WANT_XHTTP=false || WANT_XHTTP=true ;;
       3) $WANT_REALITY && WANT_REALITY=false || WANT_REALITY=true ;;
       4) $WANT_HY2 && WANT_HY2=false || WANT_HY2=true ;;
       5) $WANT_WARP && WANT_WARP=false || WANT_WARP=true ;;
-      6) ask_valid DOMAIN "Enter Domain" "$RE_DOMAIN" "${DOMAIN}" ;;
+      6) ask_valid DOMAIN "Enter Domain" "$RE_DOMAIN" "${DOMAIN:-}" ;;
       7) collect_nginx_ports ;;
-      8) ask CONFIG_NAME "Enter Config Name" "${CONFIG_NAME}"; CONFIG_NAME="${CONFIG_NAME// /_}" ;;
-      9) ask_valid SUB_PATH_IN "Enter Subscription Path" "$RE_SUBPATH" "${SUB_PATH_IN}" ;;
+      8) ask CONFIG_NAME "Enter Config Name" "${CONFIG_NAME:-}"; CONFIG_NAME="${CONFIG_NAME// /_}" ;;
+      9) ask_valid SUB_PATH_IN "Enter Subscription Path" "$RE_SUBPATH" "${SUB_PATH_IN:-}" ;;
       0) 
         if ! $WANT_WS && ! $WANT_XHTTP && ! $WANT_REALITY && ! $WANT_HY2; then
           warn "At least one protocol must be selected!"; press_enter; continue
         fi
-        if { $WANT_WS || $WANT_XHTTP; } && [ -z "$DOMAIN" ]; then
+        if { $WANT_WS || $WANT_XHTTP; } && [ -z "${DOMAIN:-}" ]; then
           warn "Domain is required for WS/XHTTP!"; press_enter; continue
         fi
         if $WANT_WS || $WANT_XHTTP; then USE_DOMAIN=true; else USE_DOMAIN=false; fi
         [ "${#NGINX_PORTS[@]}" -eq 0 ] && NGINX_PORTS=(2096)
         
-        if [ -n "$SUB_PATH_IN" ]; then
+        if [ -n "${SUB_PATH_IN:-}" ]; then
           SUB_TOKEN="$SUB_PATH_IN"
         else
           SUB_TOKEN="$(openssl rand -hex 16)"
@@ -431,7 +431,7 @@ install_warp(){
       apt)
         curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
           | gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-        echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(. /etc/os-release && echo "$VERSION_CODENAME") main" \
+        echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(source /etc/os-release 2>/dev/null || true; echo "${VERSION_CODENAME:-}") main" \
           > /etc/apt/sources.list.d/cloudflare-client.list
         apt-get update -y
         apt-get install -y cloudflare-warp || { warn "WARP install failed; disabling WARP."; WANT_WARP=false; return 0; }
@@ -491,26 +491,27 @@ menu_mode(){
   printf "  3) Reality only\n" >"$TTY"
   printf "  4) Hysteria2 only\n" >"$TTY"
   printf "  5) Custom\n" >"$TTY"
+  local MODE=""
   ask_choice MODE "Choice" "1" 1 2 3 4 5
-  case "$MODE" in
+  case "${MODE:-}" in
     1) WANT_WS=true; WANT_XHTTP=true; WANT_REALITY=true; WANT_HY2=true ;;
     2) WANT_WS=true; WANT_XHTTP=true ;;
     3) WANT_REALITY=true ;;
     4) WANT_HY2=true ;;
     5)
-      local a
-      ask_yesno a "Enable VLESS-WS?"    "y"; [ "$a" = y ] && WANT_WS=true
-      ask_yesno a "Enable VLESS-XHTTP?" "y"; [ "$a" = y ] && WANT_XHTTP=true
-      ask_yesno a "Enable Reality?"     "y"; [ "$a" = y ] && WANT_REALITY=true
-      ask_yesno a "Enable Hysteria2?"   "y"; [ "$a" = y ] && WANT_HY2=true
+      local a=""
+      ask_yesno a "Enable VLESS-WS?"    "y"; [ "${a:-}" = y ] && WANT_WS=true
+      ask_yesno a "Enable VLESS-XHTTP?" "y"; [ "${a:-}" = y ] && WANT_XHTTP=true
+      ask_yesno a "Enable Reality?"     "y"; [ "${a:-}" = y ] && WANT_REALITY=true
+      ask_yesno a "Enable Hysteria2?"   "y"; [ "${a:-}" = y ] && WANT_HY2=true
       ;;
   esac
   if $WANT_WS || $WANT_XHTTP; then USE_DOMAIN=true; fi
   $WANT_WS || $WANT_XHTTP || $WANT_REALITY || $WANT_HY2 || die "Nothing selected."
 
-  local w
+  local w=""
   ask_yesno w "Enable WARP outbound for blocked sites (Google/OpenAI/Spotify/Netflix...)?" "y"
-  [ "$w" = y ] && WANT_WARP=true
+  [ "${w:-}" = y ] && WANT_WARP=true
 }
 
 menu_fingerprint(){
@@ -523,8 +524,9 @@ menu_fingerprint(){
   printf "  6) edge\n" >"$TTY"
   printf "  7) random\n" >"$TTY"
   printf "  8) randomized\n" >"$TTY"
+  local FP_NUM=""
   ask_choice FP_NUM "Choice" "1" 1 2 3 4 5 6 7 8
-  case "$FP_NUM" in
+  case "${FP_NUM:-}" in
     1) FP="chrome"     ;;
     2) FP="firefox"    ;;
     3) FP="safari"     ;;
@@ -541,18 +543,18 @@ collect_nginx_ports(){
   NGINX_PORTS=()
   printf "\n${C2}Nginx port(s) — Cloudflare HTTPS only: ${CF_PORTS[*]}${C0}\n" >"$TTY"
   printf "  Enter one port at a time. Press Enter on empty line to finish.\n" >"$TTY"
-  local p def dup x
+  local p="" def="" dup=false x=""
   while true; do
     if [ "${#NGINX_PORTS[@]}" -eq 0 ]; then def="2096"; else def=""; fi
     ask p "Nginx port (Enter to finish)" "$def"
-    if [ -z "$p" ]; then
+    if [ -z "${p:-}" ]; then
       if [ "${#NGINX_PORTS[@]}" -eq 0 ]; then warn "At least one port is required."; continue; fi
       break
     fi
     if ! [[ "$p" =~ ^[0-9]+$ ]]; then warn "Not a number. Try again."; continue; fi
     if ! is_cf_port "$p"; then warn "$p is not a Cloudflare HTTPS port. Allowed: ${CF_PORTS[*]}"; continue; fi
     dup=false
-    for x in "${NGINX_PORTS[@]}"; do [ "$x" = "$p" ] && dup=true && break; done
+    for x in "${NGINX_PORTS[@]:-}"; do [ "$x" = "$p" ] && dup=true && break; done
     if $dup; then warn "Port $p already added."; continue; fi
     NGINX_PORTS+=("$p")
     ok "Port $p added.  (current: ${NGINX_PORTS[*]})"
@@ -565,19 +567,19 @@ collect_external_proxies(){
   printf "\n${C2}External (CDN clean) proxies — multiple addresses = redundancy in sub${C0}\n" >"$TTY"
   printf "  Paste lines in this EXACT format, one per line:\n" >"$TTY"
   printf '    PORT_IPS[2096]="104.19.184.210,104.27.53.171"\n' >"$TTY"
-  printf "  Port MUST be one assigned to Nginx: ${NGINX_PORTS[*]}\n" >"$TTY"
+  printf "  Port MUST be one assigned to Nginx: ${NGINX_PORTS[*]:-}\n" >"$TTY"
   printf "  Finish with an empty line. Leave empty to skip.\n" >"$TTY"
-  local line port ips found p
+  local line="" port="" ips="" found=false p=""
   while true; do
     printf "${C1}> ${C0}" >"$TTY"
     read -r line <"$TTY" || break
     line="$(printf '%s' "$line" | tr -d '[:space:]')"
-    [ -z "$line" ] && break
+    [ -z "${line:-}" ] && break
     if [[ "$line" =~ $RE_EXT ]]; then
       port="${BASH_REMATCH[1]}"; ips="${BASH_REMATCH[2]}"
       found=false
-      for p in "${NGINX_PORTS[@]}"; do [ "$port" = "$p" ] && found=true && break; done
-      if ! $found; then warn "Port ${port} is NOT in Nginx list (${NGINX_PORTS[*]}). Ignored."; continue; fi
+      for p in "${NGINX_PORTS[@]:-}"; do [ "$port" = "$p" ] && found=true && break; done
+      if ! $found; then warn "Port ${port} is NOT in Nginx list (${NGINX_PORTS[*]:-}). Ignored."; continue; fi
       PORT_IPS["$port"]="$ips"
       EXT_COUNT=$((EXT_COUNT+1))
       ok "Added: port ${port} -> ${ips}"
@@ -595,9 +597,10 @@ collect_inputs(){
   printf "\n${C2}=== Ports ===${C0}\n" >"$TTY"
   printf "  1) Use defaults (Nginx 2096, Hysteria2 36712, Reality 8443)\n" >"$TTY"
   printf "  2) Customize ports\n" >"$TTY"
+  local PORT_MODE=""
   ask_choice PORT_MODE "Choice" "1" 1 2
 
-  if [ "$PORT_MODE" = "2" ]; then
+  if [ "${PORT_MODE:-}" = "2" ]; then
     $USE_DOMAIN   && collect_nginx_ports
     $WANT_HY2     && ask_port HY2_PORT "Hysteria2 port (UDP)" "36712"
     $WANT_REALITY && ask_port REALITY_PORT "Reality port (direct TCP)" "8443"
@@ -606,16 +609,17 @@ collect_inputs(){
   fi
 
   if $USE_DOMAIN; then
-    ask_valid DOMAIN "Domain for WS/XHTTP (Cloudflare orange-cloud)" "$RE_DOMAIN"
+    ask_valid DOMAIN "Domain for WS/XHTTP (Cloudflare orange-cloud)" "$RE_DOMAIN" "${DOMAIN:-}"
   fi
 
   if $WANT_HY2; then
     printf "\n${C2}Hysteria2 certificate:${C0} 1) self-signed  2) Let's Encrypt\n" >"$TTY"
+    local HY2_CERT_CH=""
     ask_choice HY2_CERT_CH "Choice" "1" 1 2
-    if [ "$HY2_CERT_CH" = "2" ]; then
+    if [ "${HY2_CERT_CH:-}" = "2" ]; then
       HY2_CERT="le"
-      ask_valid HY2_DOMAIN "Hysteria2 subdomain (grey-cloud / DNS only)" "$RE_DOMAIN"
-      ask_valid LE_EMAIL   "Email for Let's Encrypt" "$RE_EMAIL"
+      ask_valid HY2_DOMAIN "Hysteria2 subdomain (grey-cloud / DNS only)" "$RE_DOMAIN" "${HY2_DOMAIN:-}"
+      ask_valid LE_EMAIL   "Email for Let's Encrypt" "$RE_EMAIL" "${LE_EMAIL:-}"
     else
       HY2_CERT="self"
     fi
@@ -631,8 +635,9 @@ collect_inputs(){
     while true; do
       collect_external_proxies
       if [ "${EXT_COUNT:-0}" -gt 0 ]; then break; fi
+      local SURE=""
       ask_yesno SURE "No proxies entered. Connect directly to ${DOMAIN} on port ${NGINX_PORTS[0]}?" "y"
-      if [ "$SURE" = "y" ]; then
+      if [ "${SURE:-}" = "y" ]; then
         PORT_IPS["${NGINX_PORTS[0]}"]="$DOMAIN"
         EXT_COUNT=1
         warn "Using domain ${DOMAIN} directly on port ${NGINX_PORTS[0]}."
@@ -646,7 +651,7 @@ collect_inputs(){
 
   if $USE_DOMAIN; then
     ask SUB_PATH_IN "Subscription path (Enter for random)" ""
-    if [ -n "$SUB_PATH_IN" ]; then
+    if [ -n "${SUB_PATH_IN:-}" ]; then
       if [[ "$SUB_PATH_IN" =~ $RE_SUBPATH ]]; then
         SUB_TOKEN="$SUB_PATH_IN"; ok "Subscription path set to: ${SUB_TOKEN}"
       else
@@ -774,8 +779,8 @@ write_nginx(){
   echo "<html><body><h1>It works.</h1></body></html>" > /var/www/html/index.html
   rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 
-  local listens="" p
-  for p in "${NGINX_PORTS[@]}"; do
+  local listens="" p=""
+  for p in "${NGINX_PORTS[@]:-}"; do
     listens+="    listen ${p} ssl;"$'\n'
     listens+="    listen [::]:${p} ssl;"$'\n'
   done
@@ -845,8 +850,8 @@ write_hysteria(){
   $WANT_HY2 || return 0
   mkdir -p /etc/hysteria
 
-  local cert_path key_path
-  if [ "$HY2_CERT" = "le" ]; then
+  local cert_path="" key_path=""
+  if [ "${HY2_CERT:-}" = "le" ]; then
     systemctl stop nginx 2>/dev/null || true
     certbot certonly --standalone -d "$HY2_DOMAIN" \
       --non-interactive --agree-tos -m "$LE_EMAIL" || die "Let's Encrypt failed."
@@ -936,15 +941,15 @@ EOF
 }
 
 gen_links(){
-  local port ip
+  local port="" ip=""
   LINKS=()
   SERVER_IP="$(curl -fsSL https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')"
   # چند آدرس در ساب: هر IP در هر پورت یک لینک مستقل می‌سازد (افزونگی در برابر فیلتر)
   if $WANT_WS || $WANT_XHTTP; then
     for port in "${!PORT_IPS[@]}"; do
       IFS=',' read -ra _ips <<< "${PORT_IPS[$port]}"
-      for ip in "${_ips[@]}"; do
-        [ -z "$ip" ] && continue
+      for ip in "${_ips[@]:-}"; do
+        [ -z "${ip:-}" ] && continue
         $WANT_WS && LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=${FP}&type=ws&host=${DOMAIN}&path=${WS_PATH}#${CONFIG_NAME}-WS-${ip}-${port}")
         $WANT_XHTTP && LINKS+=("vless://${UUID}@${ip}:${port}?encryption=none&security=tls&sni=${DOMAIN}&fp=${FP}&type=xhttp&host=${DOMAIN}&path=${XHTTP_PATH}&mode=auto#${CONFIG_NAME}-XHTTP-${ip}-${port}")
       done
@@ -954,8 +959,8 @@ gen_links(){
   $WANT_REALITY && LINKS+=("vless://${UUID}@${SERVER_IP}:${REALITY_PORT}?encryption=none&security=reality&sni=${SNI}&fp=${FP}&pbk=${REALITY_PUB}&sid=${REALITY_SID}&flow=xtls-rprx-vision&type=tcp#${CONFIG_NAME}-Reality")
 
   if $WANT_HY2; then
-    local h_host h_sni h_ins
-    if [ "$HY2_CERT" = "le" ]; then
+    local h_host="" h_sni="" h_ins=""
+    if [ "${HY2_CERT:-}" = "le" ]; then
       h_host="$HY2_DOMAIN"; h_sni="$HY2_DOMAIN"; h_ins=0
     else
       h_host="$SERVER_IP"; h_sni="$HY2_SNI"; h_ins=1
@@ -967,7 +972,7 @@ gen_links(){
 gen_subscription(){
   $USE_DOMAIN || return 0
   mkdir -p /var/www/sub
-  printf '%s\n' "${LINKS[@]}" | base64 -w0 > "/var/www/sub/${SUB_TOKEN}.txt" 2>/dev/null || printf '%s\n' "${LINKS[@]}" | base64 | tr -d '\n' > "/var/www/sub/${SUB_TOKEN}.txt"
+  printf '%s\n' "${LINKS[@]:-}" | base64 -w0 > "/var/www/sub/${SUB_TOKEN}.txt" 2>/dev/null || printf '%s\n' "${LINKS[@]:-}" | base64 | tr -d '\n' > "/var/www/sub/${SUB_TOKEN}.txt"
   SUB_URL="https://${DOMAIN}:${NGINX_PORTS[0]}/sub/${SUB_TOKEN}"
   ok "Subscription file created."
 }
@@ -975,7 +980,7 @@ gen_subscription(){
 open_firewall(){
   command -v ufw >/dev/null 2>&1 || return 0
   if $USE_DOMAIN; then
-    local p; for p in "${NGINX_PORTS[@]}"; do ufw allow "${p}/tcp" >/dev/null 2>&1 || true; done
+    local p=""; for p in "${NGINX_PORTS[@]:-}"; do ufw allow "${p}/tcp" >/dev/null 2>&1 || true; done
   fi
   $WANT_REALITY && ufw allow "${REALITY_PORT}/tcp" >/dev/null 2>&1 || true
   $WANT_HY2     && ufw allow "${HY2_PORT}/udp"     >/dev/null 2>&1 || true
@@ -1009,11 +1014,11 @@ start_services(){
 print_summary(){
   clear_screen
   printf "\n${C2}================ DONE ================${C0}\n" >"$TTY"
-  local l
-  for l in "${LINKS[@]}"; do printf "%s\n\n" "$l" >"$TTY"; done
+  local l=""
+  for l in "${LINKS[@]:-}"; do printf "%s\n\n" "$l" >"$TTY"; done
   if $USE_DOMAIN; then
     printf "${CG}Nginx ports:${C0} %s\n" "${NGINX_PORTS[*]:-}" >"$TTY"
-    printf "${CG}Subscription URL:${C0}\n%s\n" "${SUB_URL}" >"$TTY"
+    printf "${CG}Subscription URL:${C0}\n%s\n" "${SUB_URL:-}" >"$TTY"
     printf "${C2}Note:${C0} Cloudflare SSL 'Full', orange-cloud, port in 443/2053/2083/2087/2096/8443.\n" >"$TTY"
   fi
   if $WANT_HY2; then
@@ -1031,7 +1036,7 @@ execute_build(){
   banner "  ║           Building Configurations        ║"
   banner "  ╚══════════════════════════════════════════╝"
   install_deps
-  if [ -z "$UUID" ]; then gen_secrets; fi
+  if [ -z "${UUID:-}" ]; then gen_secrets; fi
   write_xray
   write_nginx
   write_hysteria
@@ -1075,16 +1080,16 @@ restore_menu(){
     return
   fi
   
-  local i=1
-  for b in "${backups[@]}"; do
+  local i=1 b=""
+  for b in "${backups[@]:-}"; do
     printf "  ${C2}%d)${C0} %s\n" "$i" "$(basename "$b")" >"$TTY"
     i=$((i+1))
   done
   printf "  ${CR}0)${C0} Cancel\n\n" >"$TTY"
   
-  local sel
+  local sel=""
   ask sel "Select backup to restore" "0"
-  if [ "$sel" -eq 0 ]; then return; fi
+  if [ "${sel:-0}" -eq 0 ]; then return; fi
   if [ "$sel" -ge 1 ] && [ "$sel" -le "${#backups[@]}" ]; then
     local chosen="${backups[$((sel-1))]}"
     info "Restoring from $chosen ..."
@@ -1132,9 +1137,9 @@ full_removal(){
   banner "  ║          Complete Removal                ║"
   banner "  ╚══════════════════════════════════════════╝"
   warn "This will remove Xray, Hysteria, WARP, configs, logs, and backups!"
-  local ans
+  local ans=""
   ask_yesno ans "Are you absolutely sure?" "n"
-  if [ "$ans" = "y" ]; then
+  if [ "${ans:-}" = "y" ]; then
     info "Stopping services..."
     systemctl stop xray hysteria-server hysteria warp-svc nginx 2>/dev/null || true
     systemctl disable xray hysteria-server hysteria warp-svc nginx 2>/dev/null || true
@@ -1167,9 +1172,9 @@ main_menu(){
     printf "  ${C2}6)${C0} Complete Removal\n" >"$TTY"
     printf "  ${CR}7)${C0} Exit\n\n" >"$TTY"
     
-    local opt
+    local opt=""
     ask opt "Please select an option" ""
-    case "$opt" in
+    case "${opt:-}" in
       1) new_install_menu ;;
       2) modify_config_menu ;;
       3) rebuild_config ;;
