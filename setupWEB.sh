@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CR-VPN Web Panel Installer
+# MOJA Web Panel Installer
 set -e
 
 # Colors
@@ -7,7 +7,7 @@ C0=$'\033[0m'; C1=$'\033[36m'; C2=$'\033[1;33m'; CR=$'\033[31m'; CG=$'\033[32m'
 
 clear
 echo "${C1}=========================================="
-echo "    CR-VPN Web Panel Setup Installer      "
+echo "    MOJA Web Panel Setup Installer        "
 echo "==========================================${C0}"
 echo ""
 
@@ -24,7 +24,11 @@ fi
 echo ""
 echo "${C2}[*] Installing system dependencies...${C0}"
 apt-get update -y >/dev/null 2>&1
-apt-get install -y python3 python3-pip python3-venv curl vnstat jq >/dev/null 2>&1
+apt-get install -y python3 python3-pip python3-venv curl vnstat jq ufw >/dev/null 2>&1
+
+echo "${C2}[*] Opening Firewall Ports...${C0}"
+ufw allow ${PANEL_PORT}/tcp >/dev/null 2>&1 || true
+iptables -I INPUT -p tcp --dport ${PANEL_PORT} -j ACCEPT >/dev/null 2>&1 || true
 
 mkdir -p /opt/cr-vpn/templates
 cd /opt/cr-vpn
@@ -141,7 +145,7 @@ cat << 'EOF' > /opt/cr-vpn/templates/login.html
 <html lang="en">
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CR-VPN Panel Login</title>
+    <title>MOJA Panel Login</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { background: linear-gradient(135deg, #09000a 0%, #170014 50%, #1a0005 100%); color: #fff; min-height: 100vh; display: flex; align-items: center; justify-content: center; font-family: 'Inter', sans-serif; }
@@ -152,7 +156,7 @@ cat << 'EOF' > /opt/cr-vpn/templates/login.html
 </head>
 <body>
     <div class="glass w-full max-w-md p-8 m-4">
-        <h1 class="text-3xl font-bold text-center mb-8 bg-clip-text text-transparent bg-gradient-to-r from-purple-500 to-red-500">CR-VPN Panel</h1>
+        <h1 class="text-3xl font-bold text-center mb-8 bg-clip-text text-transparent bg-gradient-to-r from-purple-500 to-red-500">MOJA Panel</h1>
         {% if error %}
         <div class="bg-red-500/20 border border-red-500/50 text-red-200 p-3 rounded-lg mb-6 text-center text-sm">{{ error }}</div>
         {% endif %}
@@ -179,7 +183,7 @@ cat << 'EOF' > /opt/cr-vpn/templates/index.html
 <html lang="en">
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CR-VPN Dashboard</title>
+    <title>MOJA Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <style>
@@ -202,7 +206,7 @@ cat << 'EOF' > /opt/cr-vpn/templates/index.html
         <div class="w-64 glass flex flex-col justify-between">
             <div>
                 <div class="p-6">
-                    <h1 class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-purple-500 to-red-500">CR-VPN</h1>
+                    <h1 class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-purple-500 to-red-500">MOJA</h1>
                 </div>
                 <nav class="mt-6">
                     <a @click="tab = 'dash'" :class="{'bg-white/10': tab=='dash'}" class="block px-6 py-3 cursor-pointer hover:bg-white/5 transition">📊 Dashboard</a>
@@ -401,7 +405,7 @@ EOF
 echo "${C2}[*] Configuring Systemd Service...${C0}"
 cat << EOF > /etc/systemd/system/cr-vpn-panel.service
 [Unit]
-Description=CR-VPN Web Panel
+Description=MOJA Web Panel
 After=network.target
 
 [Service]
@@ -416,6 +420,10 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# Save Panel port to state for the core script reverse proxy
+mkdir -p /etc/vpn-installer
+echo "PANEL_PORT=\"${PANEL_PORT}\"" >> /etc/vpn-installer/state.env
 
 systemctl daemon-reload
 systemctl enable cr-vpn-panel
